@@ -353,6 +353,36 @@ test('POS de supermercado confirma caja, venta FEFO y devoluciones en el servido
   assert.match(returnsRoute, /supermarket\.returns\.create/);
 });
 
+test('supermercado controla conteos, mermas, transferencias y precios masivos', () => {
+  const migration = fs.readFileSync(
+    path.join(__dirname, '../../packages/database/supabase/migrations/20260718000025_supermarket_inventory_controls.sql'),
+    'utf8',
+  );
+  const workspace = fs.readFileSync(path.join(__dirname, 'src/components/supermarket/SupermarketWorkspaceConsole.tsx'), 'utf8');
+  const config = fs.readFileSync(path.join(__dirname, 'src/config/businessTypes.ts'), 'utf8');
+  const repository = fs.readFileSync(path.join(__dirname, 'src/lib/api/supermarketRepository.ts'), 'utf8');
+  const inventoryRoute = fs.readFileSync(path.join(__dirname, 'src/app/api/rubros/supermarket/inventory-events/route.ts'), 'utf8');
+  const transferRoute = fs.readFileSync(path.join(__dirname, 'src/app/api/rubros/supermarket/transfers/route.ts'), 'utf8');
+  const pricesRoute = fs.readFileSync(path.join(__dirname, 'src/app/api/rubros/supermarket/bulk-prices/route.ts'), 'utf8');
+
+  ['supermarket_inventory_events', 'supermarket_transfers', 'supermarket_transfer_lines', 'supermarket_price_batches', 'supermarket_price_batch_lines'].forEach((table) => {
+    assert.match(migration, new RegExp(`CREATE TABLE IF NOT EXISTS public\\.${table}`));
+  });
+  ['supermarket_adjust_inventory', 'supermarket_create_transfer', 'supermarket_apply_bulk_prices'].forEach((fn) => {
+    assert.match(migration, new RegExp(`FUNCTION public\\.${fn}`));
+    assert.match(repository, new RegExp(`'${fn}'`));
+  });
+  assert.match(migration, /ORDER BY expiration_date ASC NULLS LAST/);
+  assert.match(migration, /pg_advisory_xact_lock/);
+  assert.match(migration, /jsonb_array_length\(p_items\) > 5000/);
+  assert.match(inventoryRoute, /supermarket\.inventory\.count/);
+  assert.match(inventoryRoute, /supermarket\.inventory\.waste/);
+  assert.match(transferRoute, /supermarket\.inventory\.transfer/);
+  assert.match(pricesRoute, /supermarket\.prices\.bulk/);
+  assert.match(workspace, /Control operativo/);
+  assert.match(config, /supermarket#operations/);
+});
+
 test('supermercado persiste catalogo, compras y lotes con recepcion atomica', () => {
   const migration = fs.readFileSync(
     path.join(__dirname, '../../packages/database/supabase/migrations/20260718000023_supermarket_domain.sql'),

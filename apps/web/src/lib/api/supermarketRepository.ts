@@ -101,6 +101,63 @@ export interface SupermarketReturnResult {
   duplicate: boolean;
 }
 
+export interface SupermarketBranchRecord {
+  id: string;
+  name: string;
+  isMain: boolean;
+  productCount: number;
+  stockUnits: number;
+}
+
+export interface SupermarketInventoryEventRecord {
+  id: string;
+  productId: string;
+  productName: string;
+  operation: 'count' | 'waste';
+  previousQuantity: number;
+  declaredQuantity: number;
+  delta: number;
+  reason: string;
+  createdAt: string;
+}
+
+export interface SupermarketInventoryAdjustmentInput {
+  idempotencyKey: string;
+  productId: string;
+  operation: 'count' | 'waste';
+  quantity: number;
+  reason: string;
+}
+
+export interface SupermarketTransferRecord {
+  id: string;
+  transferNumber: number;
+  sourceBranchId: string;
+  sourceBranchName: string;
+  destinationBranchId: string;
+  destinationBranchName: string;
+  productId: string;
+  productName: string;
+  quantity: number;
+  status: 'completed' | 'cancelled';
+  notes: string;
+  createdAt: string;
+}
+
+export interface SupermarketTransferInput {
+  idempotencyKey: string;
+  destinationBranchId: string;
+  productId: string;
+  quantity: number;
+  notes: string;
+}
+
+export interface SupermarketBulkPriceInput {
+  idempotencyKey: string;
+  description: string;
+  items: Array<{ productId: string; newPrice: number; promo: SupermarketPromo }>;
+}
+
 interface DatabaseProduct {
   id: string;
   name: string;
@@ -147,6 +204,9 @@ interface LocalSupermarketState {
   cash: Map<string, SupermarketCashState>;
   saleResults: Map<string, SupermarketSaleResult>;
   returnResults: Map<string, SupermarketReturnResult>;
+  inventoryEvents: Map<string, SupermarketInventoryEventRecord[]>;
+  transfers: Map<string, SupermarketTransferRecord[]>;
+  bulkPriceResults: Map<string, { batchId: string; updatedCount: number; duplicate: boolean }>;
 }
 
 const globalWithSupermarket = globalThis as typeof globalThis & { __programaSassSupermarket?: LocalSupermarketState };
@@ -157,11 +217,17 @@ const localState = globalWithSupermarket.__programaSassSupermarket ?? {
   cash: new Map<string, SupermarketCashState>(),
   saleResults: new Map<string, SupermarketSaleResult>(),
   returnResults: new Map<string, SupermarketReturnResult>(),
+  inventoryEvents: new Map<string, SupermarketInventoryEventRecord[]>(),
+  transfers: new Map<string, SupermarketTransferRecord[]>(),
+  bulkPriceResults: new Map<string, { batchId: string; updatedCount: number; duplicate: boolean }>(),
 };
 globalWithSupermarket.__programaSassSupermarket = localState;
 localState.cash ??= new Map<string, SupermarketCashState>();
 localState.saleResults ??= new Map<string, SupermarketSaleResult>();
 localState.returnResults ??= new Map<string, SupermarketReturnResult>();
+localState.inventoryEvents ??= new Map<string, SupermarketInventoryEventRecord[]>();
+localState.transfers ??= new Map<string, SupermarketTransferRecord[]>();
+localState.bulkPriceResults ??= new Map<string, { batchId: string; updatedCount: number; duplicate: boolean }>();
 
 function daysUntil(date: string): number {
   if (!date) return 9999;
@@ -590,5 +656,147 @@ export async function registerSupermarketReturn(context: SupermarketContext, inp
   if (input.disposition === 'restock') localState.products.set(localKey(context), products.map((candidate) => candidate.id === product.id ? { ...candidate, stock: candidate.stock + input.quantity } : candidate));
   const result: SupermarketReturnResult = { returnId: `return-${crypto.randomUUID()}`, productId: product.id, productName: product.name, disposition: input.disposition, duplicate: false };
   localState.returnResults.set(resultKey, result);
+  return result;
+}
+
+export async function listSupermarketBranches(context: SupermarketContext): Promise<SupermarketBranchRecord[]> {
+  if (isServerSupabaseAdminConfigured) {
+    const { data, error } = await createAdminServerClient().rpc('supermarket_list_branches', {
+      p_company_id: context.companyId,
+    });
+    if (error) throw new ApiError(503, 'No se pudieron consultar las sucursales.', 'SUPERMARKET_BRANCHES_UNAVAILABLE');
+    return ((data ?? []) as Array<Record<string, unknown>>).map((item) => ({
+      id: String(item.id), name: String(item.name), isMain: item.is_main === true,
+      productCount: Number(item.product_count ?? 0), stockUnits: Number(item.stock_units ?? 0),
+    }));
+  }
+  if (process.env.NODE_ENV === 'production') persistenceUnavailable();
+  const currentBranch = branchId(context);
+  return [{
+    id: currentBranch, name: 'Sucursal actual', isMain: true,
+    productCount: localProducts(context).length,
+    stockUnits: localProducts(context).reduce((sum, product) => sum + product.stock, 0),
+  }];
+}
+
+export async function listSupermarketInventoryEvents(context: SupermarketContext): Promise<SupermarketInventoryEventRecord[]> {
+  if (isServerSupabaseAdminConfigured) {
+    const { data, error } = await createAdminServerClient().rpc('supermarket_list_inventory_events', {
+      p_company_id: context.companyId, p_branch_id: branchId(context),
+    });
+    if (error) throw new ApiError(503, 'No se pudo consultar el historial de inventario.', 'SUPERMARKET_INVENTORY_UNAVAILABLE');
+    return ((data ?? []) as Array<Record<string, unknown>>).map((item) => ({
+      id: String(item.id), productId: String(item.product_id), productName: String(item.product_name),
+      operation: item.operation as 'count' | 'waste', previousQuantity: Number(item.previous_quantity),
+      declaredQuantity: Number(item.declared_quantity), delta: Number(item.delta),
+      reason: String(item.reason), createdAt: String(item.created_at),
+    }));
+  }
+  if (process.env.NODE_ENV === 'production') persistenceUnavailable();
+  return (localState.inventoryEvents.get(localKey(context)) ?? []).map((item) => ({ ...item }));
+}
+
+export async function adjustSupermarketInventory(
+  context: SupermarketContext,
+  input: SupermarketInventoryAdjustmentInput,
+): Promise<{ eventId: string; operation: 'count' | 'waste'; previousQuantity: number; newQuantity: number; delta: number; duplicate: boolean }> {
+  if (isServerSupabaseAdminConfigured) {
+    if (!isUuid(input.productId)) throw new ApiError(400, 'El producto no es valido.', 'INVALID_PRODUCT_ID');
+    const { data, error } = await createAdminServerClient().rpc('supermarket_adjust_inventory', {
+      p_company_id: context.companyId, p_branch_id: branchId(context), p_user_id: context.userId,
+      p_idempotency_key: input.idempotencyKey, p_product_id: input.productId,
+      p_operation: input.operation, p_quantity: input.quantity, p_reason: input.reason,
+    });
+    if (error?.message.includes('INSUFFICIENT_STOCK')) throw new ApiError(409, 'La merma supera el stock disponible.', 'INSUFFICIENT_STOCK');
+    if (error?.message.includes('PRODUCT_NOT_FOUND')) throw new ApiError(404, 'Producto no encontrado.', 'PRODUCT_NOT_FOUND');
+    if (error) throw new ApiError(503, 'No se pudo registrar el control de inventario.', 'SUPERMARKET_INVENTORY_UNAVAILABLE');
+    return data as { eventId: string; operation: 'count' | 'waste'; previousQuantity: number; newQuantity: number; delta: number; duplicate: boolean };
+  }
+  if (process.env.NODE_ENV === 'production') persistenceUnavailable();
+  const events = localState.inventoryEvents.get(localKey(context)) ?? [];
+  const duplicate = events.find((event) => event.id === input.idempotencyKey);
+  if (duplicate) return { eventId: duplicate.id, operation: duplicate.operation, previousQuantity: duplicate.previousQuantity, newQuantity: duplicate.previousQuantity + duplicate.delta, delta: duplicate.delta, duplicate: true };
+  const products = localProducts(context);
+  const product = products.find((item) => item.id === input.productId);
+  if (!product) throw new ApiError(404, 'Producto no encontrado.', 'PRODUCT_NOT_FOUND');
+  const delta = input.operation === 'count' ? input.quantity - product.stock : -input.quantity;
+  if (product.stock + delta < 0) throw new ApiError(409, 'La merma supera el stock disponible.', 'INSUFFICIENT_STOCK');
+  localState.products.set(localKey(context), products.map((item) => item.id === product.id ? { ...item, stock: item.stock + delta } : item));
+  const event: SupermarketInventoryEventRecord = {
+    id: input.idempotencyKey, productId: product.id, productName: product.name, operation: input.operation,
+    previousQuantity: product.stock, declaredQuantity: input.quantity, delta,
+    reason: input.reason, createdAt: new Date().toISOString(),
+  };
+  localState.inventoryEvents.set(localKey(context), [event, ...events]);
+  return { eventId: event.id, operation: event.operation, previousQuantity: product.stock, newQuantity: product.stock + delta, delta, duplicate: false };
+}
+
+export async function listSupermarketTransfers(context: SupermarketContext): Promise<SupermarketTransferRecord[]> {
+  if (isServerSupabaseAdminConfigured) {
+    const { data, error } = await createAdminServerClient().rpc('supermarket_list_transfers', {
+      p_company_id: context.companyId, p_branch_id: branchId(context),
+    });
+    if (error) throw new ApiError(503, 'No se pudieron consultar las transferencias.', 'SUPERMARKET_TRANSFERS_UNAVAILABLE');
+    return ((data ?? []) as Array<Record<string, unknown>>).map((item) => ({
+      id: String(item.id), transferNumber: Number(item.transfer_number),
+      sourceBranchId: String(item.source_branch_id), sourceBranchName: String(item.source_branch_name),
+      destinationBranchId: String(item.destination_branch_id), destinationBranchName: String(item.destination_branch_name),
+      productId: String(item.product_id), productName: String(item.product_name), quantity: Number(item.quantity),
+      status: item.status as 'completed' | 'cancelled', notes: String(item.notes ?? ''), createdAt: String(item.created_at),
+    }));
+  }
+  if (process.env.NODE_ENV === 'production') persistenceUnavailable();
+  return (localState.transfers.get(localKey(context)) ?? []).map((item) => ({ ...item }));
+}
+
+export async function createSupermarketTransfer(
+  context: SupermarketContext,
+  input: SupermarketTransferInput,
+): Promise<{ transferId: string; transferNumber: number; duplicate: boolean }> {
+  if (isServerSupabaseAdminConfigured) {
+    if (!isUuid(input.destinationBranchId) || !isUuid(input.productId)) throw new ApiError(400, 'La transferencia no es valida.', 'INVALID_TRANSFER');
+    const { data, error } = await createAdminServerClient().rpc('supermarket_create_transfer', {
+      p_company_id: context.companyId, p_source_branch_id: branchId(context),
+      p_destination_branch_id: input.destinationBranchId, p_user_id: context.userId,
+      p_idempotency_key: input.idempotencyKey, p_product_id: input.productId,
+      p_quantity: input.quantity, p_notes: input.notes,
+    });
+    if (error?.message.includes('INSUFFICIENT_STOCK')) throw new ApiError(409, 'No hay stock suficiente para transferir.', 'INSUFFICIENT_STOCK');
+    if (error?.message.includes('BRANCH_COMPANY_MISMATCH')) throw new ApiError(404, 'La sucursal destino no pertenece a la empresa.', 'BRANCH_NOT_FOUND');
+    if (error?.message.includes('PRODUCT_NOT_FOUND')) throw new ApiError(404, 'Producto no encontrado.', 'PRODUCT_NOT_FOUND');
+    if (error) throw new ApiError(503, 'No se pudo completar la transferencia.', 'SUPERMARKET_TRANSFERS_UNAVAILABLE');
+    return data as { transferId: string; transferNumber: number; duplicate: boolean };
+  }
+  if (process.env.NODE_ENV === 'production') persistenceUnavailable();
+  throw new ApiError(409, 'Debe configurar una segunda sucursal para transferir stock.', 'DESTINATION_BRANCH_REQUIRED');
+}
+
+export async function applySupermarketBulkPrices(
+  context: SupermarketContext,
+  input: SupermarketBulkPriceInput,
+): Promise<{ batchId: string; updatedCount: number; duplicate: boolean }> {
+  if (isServerSupabaseAdminConfigured) {
+    const { data, error } = await createAdminServerClient().rpc('supermarket_apply_bulk_prices', {
+      p_company_id: context.companyId, p_user_id: context.userId,
+      p_idempotency_key: input.idempotencyKey, p_description: input.description, p_items: input.items,
+    });
+    if (error?.message.includes('PRODUCT_NOT_FOUND')) throw new ApiError(404, 'Uno de los productos no existe.', 'PRODUCT_NOT_FOUND');
+    if (error) throw new ApiError(503, 'No se pudo aplicar el lote de precios.', 'SUPERMARKET_PRICES_UNAVAILABLE');
+    return data as { batchId: string; updatedCount: number; duplicate: boolean };
+  }
+  if (process.env.NODE_ENV === 'production') persistenceUnavailable();
+  const resultKey = `${context.companyId}:${input.idempotencyKey}`;
+  const previous = localState.bulkPriceResults.get(resultKey);
+  if (previous) return { ...previous, duplicate: true };
+  const products = localProducts(context);
+  for (const item of input.items) {
+    if (!products.some((product) => product.id === item.productId)) throw new ApiError(404, 'Uno de los productos no existe.', 'PRODUCT_NOT_FOUND');
+  }
+  localState.products.set(localKey(context), products.map((product) => {
+    const update = input.items.find((item) => item.productId === product.id);
+    return update ? { ...product, price: update.newPrice, promo: update.promo } : product;
+  }));
+  const result = { batchId: `prices-${crypto.randomUUID()}`, updatedCount: input.items.length, duplicate: false };
+  localState.bulkPriceResults.set(resultKey, result);
   return result;
 }

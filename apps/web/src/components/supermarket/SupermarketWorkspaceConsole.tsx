@@ -1,16 +1,19 @@
 'use client';
 
-import { useEffect, useMemo, useState, type ChangeEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ChangeEvent, type FormEvent, type ReactNode } from 'react';
 import {
   AlertTriangle,
+  ArrowLeftRight,
   Barcode,
   Boxes,
   CalendarClock,
   Camera,
+  ClipboardCheck,
   Image as ImageIcon,
   PackageCheck,
   Pencil,
   Plus,
+  Percent,
   Search,
   ShoppingCart,
   Truck,
@@ -24,7 +27,7 @@ import SupermarketConsole, {
   type SupermarketSaleResult,
 } from './SupermarketConsole';
 
-type Area = 'pos' | 'catalog' | 'inventory' | 'purchases' | 'lots';
+type Area = 'pos' | 'catalog' | 'inventory' | 'purchases' | 'lots' | 'operations';
 type ProductFilter = 'all' | 'active' | 'paused' | 'low' | 'expiring';
 type PurchaseStatus = 'draft' | 'ordered' | 'received';
 
@@ -47,6 +50,41 @@ interface StockLot {
   quantity: number;
   expirationDate: string;
   receivedDate: string;
+}
+
+interface Branch {
+  id: string;
+  name: string;
+  isMain: boolean;
+  productCount: number;
+  stockUnits: number;
+}
+
+interface InventoryEvent {
+  id: string;
+  productId: string;
+  productName: string;
+  operation: 'count' | 'waste';
+  previousQuantity: number;
+  declaredQuantity: number;
+  delta: number;
+  reason: string;
+  createdAt: string;
+}
+
+interface Transfer {
+  id: string;
+  transferNumber: number;
+  sourceBranchId: string;
+  sourceBranchName: string;
+  destinationBranchId: string;
+  destinationBranchName: string;
+  productId: string;
+  productName: string;
+  quantity: number;
+  status: 'completed' | 'cancelled';
+  notes: string;
+  createdAt: string;
 }
 
 const INITIAL_PRODUCTS = SUPERMARKET_PRODUCTS.map((product) => ({ ...product, imageUrl: null, active: true }));
@@ -75,6 +113,10 @@ export default function SupermarketWorkspaceConsole() {
   const [products, setProducts] = useState<SupermarketProduct[]>(INITIAL_PRODUCTS);
   const [purchases, setPurchases] = useState<Purchase[]>(INITIAL_PURCHASES);
   const [lots, setLots] = useState<StockLot[]>(INITIAL_LOTS);
+  const [branches, setBranches] = useState<Branch[]>([]);
+  const [currentBranchId, setCurrentBranchId] = useState<string | null>(null);
+  const [inventoryEvents, setInventoryEvents] = useState<InventoryEvent[]>([]);
+  const [transfers, setTransfers] = useState<Transfer[]>([]);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<ProductFilter>('all');
   const [editingProduct, setEditingProduct] = useState<SupermarketProduct | null>(null);
@@ -89,7 +131,7 @@ export default function SupermarketWorkspaceConsole() {
   useEffect(() => {
     const sync = () => {
       const hash = window.location.hash.slice(1) as Area;
-      if (['pos', 'catalog', 'inventory', 'purchases', 'lots'].includes(hash)) setArea(hash);
+      if (['pos', 'catalog', 'inventory', 'purchases', 'lots', 'operations'].includes(hash)) setArea(hash);
     };
     sync();
     window.addEventListener('hashchange', sync);
@@ -104,13 +146,20 @@ export default function SupermarketWorkspaceConsole() {
       apiFetch<{ items: Purchase[] }>('/api/rubros/supermarket/purchases'),
       apiFetch<{ items: StockLot[] }>('/api/rubros/supermarket/lots'),
       apiFetch<{ state: SupermarketCashState }>('/api/rubros/supermarket/cash'),
+      apiFetch<{ items: Branch[]; currentBranchId: string | null }>('/api/rubros/supermarket/branches'),
+      apiFetch<{ items: InventoryEvent[] }>('/api/rubros/supermarket/inventory-events'),
+      apiFetch<{ items: Transfer[] }>('/api/rubros/supermarket/transfers'),
     ])
-      .then(([catalogResponse, purchasesResponse, lotsResponse, cashResponse]) => {
+      .then(([catalogResponse, purchasesResponse, lotsResponse, cashResponse, branchesResponse, eventsResponse, transfersResponse]) => {
         if (!active) return;
         setProducts(catalogResponse.items);
         setPurchases(purchasesResponse.items);
         setLots(lotsResponse.items);
         setCashState(cashResponse.state);
+        setBranches(branchesResponse.items);
+        setCurrentBranchId(branchesResponse.currentBranchId);
+        setInventoryEvents(eventsResponse.items);
+        setTransfers(transfersResponse.items);
       })
       .catch((error: unknown) => {
         if (active) setFeedback(error instanceof Error ? error.message : 'No se pudieron sincronizar los datos del supermercado.');
@@ -239,6 +288,47 @@ export default function SupermarketWorkspaceConsole() {
     return response.item;
   };
 
+  const refreshInventoryControls = async () => {
+    const [catalogResponse, lotsResponse, branchesResponse, eventsResponse, transfersResponse] = await Promise.all([
+      apiFetch<{ items: SupermarketProduct[] }>('/api/rubros/supermarket/catalog'),
+      apiFetch<{ items: StockLot[] }>('/api/rubros/supermarket/lots'),
+      apiFetch<{ items: Branch[]; currentBranchId: string | null }>('/api/rubros/supermarket/branches'),
+      apiFetch<{ items: InventoryEvent[] }>('/api/rubros/supermarket/inventory-events'),
+      apiFetch<{ items: Transfer[] }>('/api/rubros/supermarket/transfers'),
+    ]);
+    setProducts(catalogResponse.items);
+    setLots(lotsResponse.items);
+    setBranches(branchesResponse.items);
+    setCurrentBranchId(branchesResponse.currentBranchId);
+    setInventoryEvents(eventsResponse.items);
+    setTransfers(transfersResponse.items);
+  };
+
+  const adjustInventory = async (input: { productId: string; operation: 'count' | 'waste'; quantity: number; reason: string }) => {
+    const key = `supermarket-${input.operation}:${crypto.randomUUID()}`;
+    await apiFetch('/api/rubros/supermarket/inventory-events', {
+      method: 'POST', headers: { 'Idempotency-Key': key }, body: JSON.stringify(input),
+    });
+    await refreshInventoryControls();
+    showFeedback(input.operation === 'count' ? 'Conteo aplicado y diferencia auditada.' : 'Merma registrada y lote FEFO actualizado.');
+  };
+
+  const transferStock = async (input: { destinationBranchId: string; productId: string; quantity: number; notes: string }) => {
+    await apiFetch('/api/rubros/supermarket/transfers', {
+      method: 'POST', headers: { 'Idempotency-Key': `supermarket-transfer:${crypto.randomUUID()}` }, body: JSON.stringify(input),
+    });
+    await refreshInventoryControls();
+    showFeedback('Transferencia completada con trazabilidad de lotes.');
+  };
+
+  const applyBulkPrices = async (input: { description: string; items: Array<{ productId: string; newPrice: number; promo: SupermarketProduct['promo'] }> }) => {
+    const response = await apiFetch<{ result: { updatedCount: number } }>('/api/rubros/supermarket/bulk-prices', {
+      method: 'POST', headers: { 'Idempotency-Key': `supermarket-prices:${crypto.randomUUID()}` }, body: JSON.stringify(input),
+    });
+    await refreshInventoryControls();
+    showFeedback(`${response.result.updatedCount} precios actualizados.`);
+  };
+
   const savePurchase = async () => {
     if (!editingPurchase?.supplier.trim() || !editingPurchase.productId || editingPurchase.quantity <= 0) return;
     const isNew = !editingPurchase.id;
@@ -307,6 +397,7 @@ export default function SupermarketWorkspaceConsole() {
     { id: 'inventory', label: 'Stock y reposicion', icon: Boxes },
     { id: 'purchases', label: 'Compras', icon: Truck },
     { id: 'lots', label: 'Lotes y vencimientos', icon: CalendarClock },
+    { id: 'operations', label: 'Control operativo', icon: ClipboardCheck },
   ];
 
   return (
@@ -354,9 +445,139 @@ export default function SupermarketWorkspaceConsole() {
         </section>
       )}
 
+      {area === 'operations' && <InventoryOperations
+        products={products}
+        branches={branches}
+        currentBranchId={currentBranchId}
+        events={inventoryEvents}
+        transfers={transfers}
+        busy={syncing}
+        onAdjust={adjustInventory}
+        onTransfer={transferStock}
+        onBulkPrices={applyBulkPrices}
+      />}
+
       {editingProduct && <ProductEditor product={editingProduct} setProduct={setEditingProduct} onImage={uploadImage} onSave={saveProduct} onClose={() => setEditingProduct(null)} />}
       {editingPurchase && <PurchaseEditor purchase={editingPurchase} setPurchase={setEditingPurchase} products={products} onSave={savePurchase} onClose={() => setEditingPurchase(null)} />}
     </div>
+  );
+}
+
+const inputClass = 'h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100';
+
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return <label className="mb-3 block"><span className="mb-1.5 block text-xs font-bold text-slate-600">{label}</span>{children}</label>;
+}
+
+function InventoryOperations({
+  products, branches, currentBranchId, events, transfers, busy, onAdjust, onTransfer, onBulkPrices,
+}: {
+  products: SupermarketProduct[];
+  branches: Branch[];
+  currentBranchId: string | null;
+  events: InventoryEvent[];
+  transfers: Transfer[];
+  busy: boolean;
+  onAdjust: (input: { productId: string; operation: 'count' | 'waste'; quantity: number; reason: string }) => Promise<void>;
+  onTransfer: (input: { destinationBranchId: string; productId: string; quantity: number; notes: string }) => Promise<void>;
+  onBulkPrices: (input: { description: string; items: Array<{ productId: string; newPrice: number; promo: SupermarketProduct['promo'] }> }) => Promise<void>;
+}) {
+  const [operation, setOperation] = useState<'count' | 'waste'>('count');
+  const [adjustProductId, setAdjustProductId] = useState('');
+  const [adjustQuantity, setAdjustQuantity] = useState(0);
+  const [reason, setReason] = useState('Conteo ciclico de gondola');
+  const [transferProductId, setTransferProductId] = useState('');
+  const [destinationBranchId, setDestinationBranchId] = useState('');
+  const [transferQuantity, setTransferQuantity] = useState(1);
+  const [transferNotes, setTransferNotes] = useState('Reposicion entre sucursales');
+  const [priceCategory, setPriceCategory] = useState('all');
+  const [pricePercentage, setPricePercentage] = useState(5);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+  const destinations = branches.filter((branch) => branch.id !== currentBranchId);
+  const categories = Array.from(new Set(products.map((product) => product.category))).sort();
+  const priceTargets = products.filter((product) => product.active !== false && (priceCategory === 'all' || product.category === priceCategory));
+
+  const execute = async (action: () => Promise<void>) => {
+    setSubmitting(true);
+    setError('');
+    try {
+      await action();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'No se pudo completar la operacion.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const submitAdjustment = (event: FormEvent) => {
+    event.preventDefault();
+    if (!adjustProductId || adjustQuantity < 0 || !reason.trim()) return;
+    void execute(() => onAdjust({ productId: adjustProductId, operation, quantity: adjustQuantity, reason }));
+  };
+
+  const submitTransfer = (event: FormEvent) => {
+    event.preventDefault();
+    if (!transferProductId || !destinationBranchId || transferQuantity <= 0) return;
+    void execute(() => onTransfer({ destinationBranchId, productId: transferProductId, quantity: transferQuantity, notes: transferNotes }));
+  };
+
+  const submitPrices = (event: FormEvent) => {
+    event.preventDefault();
+    if (priceTargets.length === 0 || pricePercentage < -90 || pricePercentage > 1000) return;
+    const multiplier = 1 + pricePercentage / 100;
+    void execute(() => onBulkPrices({
+      description: `${pricePercentage >= 0 ? 'Aumento' : 'Reduccion'} ${Math.abs(pricePercentage)}% - ${priceCategory === 'all' ? 'catalogo completo' : priceCategory}`,
+      items: priceTargets.map((product) => ({
+        productId: product.id,
+        newPrice: Number(Math.max(0, product.price * multiplier).toFixed(2)),
+        promo: product.promo,
+      })),
+    }));
+  };
+
+  return (
+    <section className="space-y-6" aria-label="Control operativo de supermercado">
+      <SectionHeader title="Control operativo" detail="Ajustes auditados, movimientos entre sucursales y precios por lote." />
+      {error && <div role="alert" className="rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">{error}</div>}
+
+      <div className="grid gap-6 xl:grid-cols-3">
+        <form onSubmit={submitAdjustment} className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="mb-4 flex items-center gap-2"><ClipboardCheck className="h-5 w-5 text-emerald-600" /><h3 className="font-bold text-slate-900">Conteos y mermas</h3></div>
+          <div className="mb-4 grid grid-cols-2 rounded-md bg-slate-100 p-1" role="group" aria-label="Tipo de ajuste">
+            <button type="button" onClick={() => { setOperation('count'); setReason('Conteo ciclico de gondola'); }} className={`h-9 rounded text-sm font-bold ${operation === 'count' ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-500'}`}>Conteo</button>
+            <button type="button" onClick={() => { setOperation('waste'); setReason('Producto vencido o danado'); }} className={`h-9 rounded text-sm font-bold ${operation === 'waste' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'}`}>Merma</button>
+          </div>
+          <Field label="Producto"><select required value={adjustProductId} onChange={(event) => { const id = event.target.value; setAdjustProductId(id); if (operation === 'count') setAdjustQuantity(products.find((product) => product.id === id)?.stock ?? 0); }} className={inputClass}><option value="">Seleccionar producto</option>{products.map((product) => <option key={product.id} value={product.id}>{product.name} - stock {product.stock}</option>)}</select></Field>
+          <Field label={operation === 'count' ? 'Cantidad fisica contada' : 'Cantidad descartada'}><input required type="number" min={operation === 'waste' ? 0.001 : 0} step="0.001" value={adjustQuantity} onChange={(event) => setAdjustQuantity(Number(event.target.value))} className={inputClass} /></Field>
+          <Field label="Motivo"><input required value={reason} onChange={(event) => setReason(event.target.value)} maxLength={160} className={inputClass} /></Field>
+          <button disabled={busy || submitting || !adjustProductId} className="mt-2 flex h-10 w-full items-center justify-center gap-2 rounded-md bg-emerald-600 text-sm font-bold text-white disabled:opacity-50"><ClipboardCheck className="h-4 w-4" />Registrar {operation === 'count' ? 'conteo' : 'merma'}</button>
+        </form>
+
+        <form onSubmit={submitTransfer} className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="mb-4 flex items-center gap-2"><ArrowLeftRight className="h-5 w-5 text-cyan-600" /><h3 className="font-bold text-slate-900">Transferencia de stock</h3></div>
+          <Field label="Producto"><select required value={transferProductId} onChange={(event) => setTransferProductId(event.target.value)} className={inputClass}><option value="">Seleccionar producto</option>{products.filter((product) => product.stock > 0).map((product) => <option key={product.id} value={product.id}>{product.name} - disponible {product.stock}</option>)}</select></Field>
+          <Field label="Sucursal destino"><select required value={destinationBranchId} onChange={(event) => setDestinationBranchId(event.target.value)} className={inputClass}><option value="">Seleccionar destino</option>{destinations.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}</select></Field>
+          <Field label="Cantidad"><input required type="number" min="0.001" step="0.001" value={transferQuantity} onChange={(event) => setTransferQuantity(Number(event.target.value))} className={inputClass} /></Field>
+          <Field label="Referencia"><input value={transferNotes} onChange={(event) => setTransferNotes(event.target.value)} maxLength={200} className={inputClass} /></Field>
+          {destinations.length === 0 && <p className="mb-3 text-xs font-semibold text-amber-700">La empresa necesita una segunda sucursal para transferir.</p>}
+          <button disabled={busy || submitting || !transferProductId || !destinationBranchId} className="mt-2 flex h-10 w-full items-center justify-center gap-2 rounded-md bg-cyan-600 text-sm font-bold text-white disabled:opacity-50"><ArrowLeftRight className="h-4 w-4" />Transferir</button>
+        </form>
+
+        <form onSubmit={submitPrices} className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="mb-4 flex items-center gap-2"><Percent className="h-5 w-5 text-indigo-600" /><h3 className="font-bold text-slate-900">Precios masivos</h3></div>
+          <Field label="Categoria"><select value={priceCategory} onChange={(event) => setPriceCategory(event.target.value)} className={inputClass}><option value="all">Todo el catalogo</option>{categories.map((category) => <option key={category} value={category}>{category}</option>)}</select></Field>
+          <Field label="Variacion porcentual"><div className="relative"><input required type="number" min="-90" max="1000" step="0.1" value={pricePercentage} onChange={(event) => setPricePercentage(Number(event.target.value))} className={`${inputClass} pr-9`} /><Percent className="absolute right-3 top-3 h-4 w-4 text-slate-400" /></div></Field>
+          <div className="mb-4 border-y border-slate-100 py-3 text-sm"><div className="flex justify-between"><span className="text-slate-500">Productos afectados</span><strong>{priceTargets.length}</strong></div><div className="mt-1 flex justify-between"><span className="text-slate-500">Ejemplo</span><strong>{priceTargets[0] ? `${money(priceTargets[0].price)} a ${money(priceTargets[0].price * (1 + pricePercentage / 100))}` : '-'}</strong></div></div>
+          <button disabled={busy || submitting || priceTargets.length === 0} className="mt-2 flex h-10 w-full items-center justify-center gap-2 rounded-md bg-indigo-600 text-sm font-bold text-white disabled:opacity-50"><Percent className="h-4 w-4" />Aplicar a {priceTargets.length} productos</button>
+        </form>
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-2">
+        <div className="overflow-hidden rounded-lg border border-slate-200 bg-white"><div className="border-b border-slate-200 px-4 py-3"><h3 className="font-bold text-slate-900">Ultimos controles</h3></div><div className="overflow-x-auto"><table className="w-full min-w-[620px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="px-4 py-3">Tipo</th><th className="px-4 py-3">Producto</th><th className="px-4 py-3">Diferencia</th><th className="px-4 py-3">Motivo</th><th className="px-4 py-3">Fecha</th></tr></thead><tbody className="divide-y divide-slate-100">{events.slice(0, 12).map((event) => <tr key={event.id}><td className="px-4 py-3 font-bold">{event.operation === 'count' ? 'Conteo' : 'Merma'}</td><td className="px-4 py-3">{event.productName}</td><td className={`px-4 py-3 font-bold ${event.delta < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>{event.delta > 0 ? '+' : ''}{event.delta}</td><td className="px-4 py-3 text-slate-600">{event.reason}</td><td className="px-4 py-3 text-xs text-slate-500">{new Date(event.createdAt).toLocaleString('es-AR')}</td></tr>)}{events.length === 0 && <tr><td colSpan={5} className="px-4 py-8 text-center text-slate-500">Sin controles registrados.</td></tr>}</tbody></table></div></div>
+        <div className="overflow-hidden rounded-lg border border-slate-200 bg-white"><div className="border-b border-slate-200 px-4 py-3"><h3 className="font-bold text-slate-900">Transferencias recientes</h3></div><div className="overflow-x-auto"><table className="w-full min-w-[620px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="px-4 py-3">Numero</th><th className="px-4 py-3">Producto</th><th className="px-4 py-3">Ruta</th><th className="px-4 py-3">Cantidad</th><th className="px-4 py-3">Fecha</th></tr></thead><tbody className="divide-y divide-slate-100">{transfers.slice(0, 12).map((transfer) => <tr key={transfer.id}><td className="px-4 py-3 font-mono font-bold">#{transfer.transferNumber}</td><td className="px-4 py-3 font-semibold">{transfer.productName}</td><td className="px-4 py-3 text-slate-600">{transfer.sourceBranchName} → {transfer.destinationBranchName}</td><td className="px-4 py-3 font-bold">{transfer.quantity}</td><td className="px-4 py-3 text-xs text-slate-500">{new Date(transfer.createdAt).toLocaleString('es-AR')}</td></tr>)}{transfers.length === 0 && <tr><td colSpan={5} className="px-4 py-8 text-center text-slate-500">Sin transferencias registradas.</td></tr>}</tbody></table></div></div>
+      </div>
+    </section>
   );
 }
 

@@ -115,7 +115,7 @@ Todos los rubros deben resolver, cuando corresponda:
 
 **Flujos criticos:** escanear, validar promocion, cobrar, descontar lote, reponer gondola, recibir compra y conciliar caja sin permitir stock negativo no autorizado.
 
-**Estado implementado:** catalogo e imagenes, precios y promociones, stock, compras, recepcion atomica, lotes FEFO, apertura y cierre de caja, ventas POS idempotentes y devoluciones auditadas. Los comprobantes internos permanecen pendientes de autorizacion ARCA y no inventan estado fiscal.
+**Estado implementado:** catalogo e imagenes, precios y promociones, stock, compras, recepcion atomica, lotes FEFO, apertura y cierre de caja, ventas POS idempotentes, devoluciones auditadas, conteos ciclicos, mermas, transferencias entre sucursales y precios masivos. Los comprobantes internos permanecen pendientes de autorizacion ARCA y no inventan estado fiscal.
 
 ### 5. Ferreteria y materiales
 
@@ -311,7 +311,7 @@ Un rubro se marca `Completo` solamente cuando:
 | --- | --- | --- | --- |
 | 0 | Nucleo compartido | Completo: aislamiento, RBAC, RLS, storage, auditoria e idempotencia certificados | Pruebas de carga y observabilidad continua |
 | 1 | Gastronomia | Subprograma persistente certificado: salon, reservas, KDS, inventario, compras, caja, cola fiscal y reportes | Homologar transporte ARCA real y conciliar respuestas inciertas |
-| 2 | Supermercado | Catalogo, compras, lotes FEFO, POS, caja y devoluciones persistentes; venta y arqueo transaccionales certificados | Transferencias, conteos ciclicos, merma directa y precios masivos |
+| 2 | Supermercado | Catalogo, compras, lotes FEFO, POS, caja, devoluciones, conteos, mermas, transferencias y precios masivos certificados | Gondolas, etiquetas, fidelizacion y reportes consolidados |
 | 3 | Indumentaria | Demo integrada | Variantes, transferencias y devoluciones persistentes |
 | 4 | Ferreteria | Demo avanzada | Presupuestos, acopio, remitos y cuentas persistentes |
 | 5 | Taller mecanico | Demo avanzada | OT, fotos, aprobacion y repuestos persistentes |

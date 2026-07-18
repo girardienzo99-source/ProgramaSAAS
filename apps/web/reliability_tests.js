@@ -325,6 +325,37 @@ test('supermercado integra catalogo, compras, lotes y POS con stock', () => {
   assert.match(pos, /onSaleCommitted\?/);
 });
 
+test('supermercado persiste catalogo, compras y lotes con recepcion atomica', () => {
+  const migration = fs.readFileSync(
+    path.join(__dirname, '../../packages/database/supabase/migrations/20260718000023_supermarket_domain.sql'),
+    'utf8',
+  );
+  const catalogRoute = fs.readFileSync(path.join(__dirname, 'src/app/api/rubros/supermarket/catalog/route.ts'), 'utf8');
+  const purchasesRoute = fs.readFileSync(path.join(__dirname, 'src/app/api/rubros/supermarket/purchases/route.ts'), 'utf8');
+  const lotsRoute = fs.readFileSync(path.join(__dirname, 'src/app/api/rubros/supermarket/lots/route.ts'), 'utf8');
+  const repository = fs.readFileSync(path.join(__dirname, 'src/lib/api/supermarketRepository.ts'), 'utf8');
+  const workspace = fs.readFileSync(path.join(__dirname, 'src/components/supermarket/SupermarketWorkspaceConsole.tsx'), 'utf8');
+
+  ['supermarket_products', 'supermarket_purchase_orders', 'supermarket_purchase_order_lines', 'supermarket_stock_lots'].forEach((table) => {
+    assert.match(migration, new RegExp(`CREATE TABLE IF NOT EXISTS public\\.${table}`));
+  });
+  assert.match(migration, /public\.jwt_business_type\(\) = 'supermarket'/);
+  assert.match(migration, /CREATE OR REPLACE FUNCTION public\.supermarket_save_product/);
+  assert.match(migration, /CREATE OR REPLACE FUNCTION public\.supermarket_receive_purchase/);
+  assert.match(migration, /FOR UPDATE/g);
+  assert.match(migration, /supermarket_purchase_receipt/);
+  assert.match(migration, /quantity_remaining/);
+  assert.match(catalogRoute, /authorizeRequest\(request, 'supermarket\.catalog\.read', 'supermarket'\)/);
+  assert.match(purchasesRoute, /supermarket\.purchases\.receive/);
+  assert.match(lotsRoute, /supermarket\.inventory\.read/);
+  assert.match(repository, /supermarket_list_products/);
+  assert.match(repository, /supermarket_receive_purchase/);
+  assert.match(repository, /NODE_ENV === 'production'/);
+  assert.match(workspace, /api\/rubros\/supermarket\/catalog/);
+  assert.match(workspace, /uploadCatalogImage/);
+  assert.doesNotMatch(workspace, /new FileReader\(\)/);
+});
+
 test('ferreteria integra catalogo, ubicaciones, compras y proveedores', () => {
   const registry = fs.readFileSync(path.join(__dirname, 'src/components/workspace/RubroWorkspace.tsx'), 'utf8');
   const config = fs.readFileSync(path.join(__dirname, 'src/config/businessTypes.ts'), 'utf8');

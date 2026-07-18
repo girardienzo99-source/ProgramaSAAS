@@ -16,6 +16,7 @@ import {
   Truck,
   X,
 } from 'lucide-react';
+import { apiFetch, uploadCatalogImage } from '@/lib/client/apiFetch';
 import SupermarketConsole, { SUPERMARKET_PRODUCTS, type SupermarketProduct } from './SupermarketConsole';
 
 type Area = 'pos' | 'catalog' | 'inventory' | 'purchases' | 'lots';
@@ -74,6 +75,7 @@ export default function SupermarketWorkspaceConsole() {
   const [editingProduct, setEditingProduct] = useState<SupermarketProduct | null>(null);
   const [editingPurchase, setEditingPurchase] = useState<Purchase | null>(null);
   const [feedback, setFeedback] = useState('');
+  const [syncing, setSyncing] = useState(false);
 
   useEffect(() => {
     const sync = () => {
@@ -83,6 +85,29 @@ export default function SupermarketWorkspaceConsole() {
     sync();
     window.addEventListener('hashchange', sync);
     return () => window.removeEventListener('hashchange', sync);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    setSyncing(true);
+    Promise.all([
+      apiFetch<{ items: SupermarketProduct[] }>('/api/rubros/supermarket/catalog'),
+      apiFetch<{ items: Purchase[] }>('/api/rubros/supermarket/purchases'),
+      apiFetch<{ items: StockLot[] }>('/api/rubros/supermarket/lots'),
+    ])
+      .then(([catalogResponse, purchasesResponse, lotsResponse]) => {
+        if (!active) return;
+        setProducts(catalogResponse.items);
+        setPurchases(purchasesResponse.items);
+        setLots(lotsResponse.items);
+      })
+      .catch((error: unknown) => {
+        if (active) setFeedback(error instanceof Error ? error.message : 'No se pudieron sincronizar los datos del supermercado.');
+      })
+      .finally(() => {
+        if (active) setSyncing(false);
+      });
+    return () => { active = false; };
   }, []);
 
   const showFeedback = (message: string) => {
@@ -111,29 +136,43 @@ export default function SupermarketWorkspaceConsole() {
   const inventoryValue = products.reduce((sum, product) => sum + product.stock * product.cost, 0);
   const pendingPurchases = purchases.filter((purchase) => purchase.status !== 'received').length;
 
-  const saveProduct = () => {
+  const saveProduct = async () => {
     if (!editingProduct?.name.trim() || !editingProduct.barcode.trim()) return;
     const isNew = !editingProduct.id;
-    const saved = {
-      ...editingProduct,
-      id: editingProduct.id || `s-${Date.now()}`,
-      daysToExpire: daysUntil(editingProduct.expirationDate),
-    };
-    setProducts((current) => isNew ? [saved, ...current] : current.map((product) => product.id === saved.id ? saved : product));
-    setEditingProduct(null);
-    showFeedback(isNew ? 'Producto agregado al catalogo.' : 'Producto actualizado.');
+    setSyncing(true);
+    try {
+      const response = await apiFetch<{ item: SupermarketProduct }>('/api/rubros/supermarket/catalog', {
+        method: 'POST',
+        body: JSON.stringify(editingProduct),
+      });
+      const saved = response.item;
+      setProducts((current) => isNew ? [saved, ...current] : current.map((product) => product.id === saved.id ? saved : product));
+      setEditingProduct(null);
+      showFeedback(isNew ? 'Producto agregado al catalogo.' : 'Producto actualizado.');
+    } catch (error) {
+      showFeedback(error instanceof Error ? error.message : 'No se pudo guardar el producto.');
+    } finally {
+      setSyncing(false);
+    }
   };
 
-  const uploadImage = (event: ChangeEvent<HTMLInputElement>) => {
+  const uploadImage = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file || !editingProduct) return;
     if (file.size > 3 * 1024 * 1024) {
       showFeedback('La imagen supera el limite de 3 MB.');
       return;
     }
-    const reader = new FileReader();
-    reader.onload = () => setEditingProduct((current) => current ? { ...current, imageUrl: String(reader.result) } : current);
-    reader.readAsDataURL(file);
+    setSyncing(true);
+    try {
+      const imageUrl = await uploadCatalogImage(file, 'supermarket_products');
+      setEditingProduct((current) => current ? { ...current, imageUrl } : current);
+      showFeedback('Imagen cargada en el catalogo.');
+    } catch (error) {
+      showFeedback(error instanceof Error ? error.message : 'No se pudo cargar la imagen.');
+    } finally {
+      setSyncing(false);
+    }
   };
 
   const commitSale = (items: Array<{ productId: string; quantity: number }>) => {
@@ -156,29 +195,66 @@ export default function SupermarketWorkspaceConsole() {
     showFeedback('Venta registrada y existencias actualizadas.');
   };
 
-  const savePurchase = () => {
+  const savePurchase = async () => {
     if (!editingPurchase?.supplier.trim() || !editingPurchase.productId || editingPurchase.quantity <= 0) return;
     const isNew = !editingPurchase.id;
-    const saved = { ...editingPurchase, id: editingPurchase.id || `oc-${Date.now()}` };
-    setPurchases((current) => isNew ? [saved, ...current] : current.map((purchase) => purchase.id === saved.id ? saved : purchase));
-    setEditingPurchase(null);
-    showFeedback(isNew ? 'Orden de compra creada.' : 'Orden de compra actualizada.');
+    setSyncing(true);
+    try {
+      const response = await apiFetch<{ item: Purchase }>('/api/rubros/supermarket/purchases', {
+        method: 'POST',
+        body: JSON.stringify(editingPurchase),
+      });
+      const saved = response.item;
+      setPurchases((current) => isNew ? [saved, ...current] : current.map((purchase) => purchase.id === saved.id ? saved : purchase));
+      setEditingPurchase(null);
+      showFeedback(isNew ? 'Orden de compra creada.' : 'Orden de compra actualizada.');
+    } catch (error) {
+      showFeedback(error instanceof Error ? error.message : 'No se pudo guardar la compra.');
+    } finally {
+      setSyncing(false);
+    }
   };
 
-  const receivePurchase = (purchase: Purchase) => {
-    const product = products.find((item) => item.id === purchase.productId);
-    if (!product || purchase.status === 'received') return;
-    setPurchases((current) => current.map((item) => item.id === purchase.id ? { ...item, status: 'received' } : item));
-    setProducts((current) => current.map((item) => item.id === product.id ? { ...item, stock: Number((item.stock + purchase.quantity).toFixed(3)), cost: purchase.unitCost } : item));
-    setLots((current) => [{
-      id: `lot-${Date.now()}`,
-      productId: product.id,
-      lotCode: purchase.lotCode.trim() || `${product.barcode.slice(-4)}-${Date.now().toString().slice(-5)}`,
-      quantity: purchase.quantity,
-      expirationDate: purchase.expirationDate || product.expirationDate,
-      receivedDate: new Date().toISOString().slice(0, 10),
-    }, ...current]);
-    showFeedback('Mercaderia recibida: stock y lote actualizados.');
+  const receivePurchase = async (purchase: Purchase) => {
+    if (purchase.status === 'received') return;
+    setSyncing(true);
+    try {
+      await apiFetch('/api/rubros/supermarket/purchases', {
+        method: 'PATCH',
+        body: JSON.stringify({ orderId: purchase.id }),
+      });
+      const [catalogResponse, purchasesResponse, lotsResponse] = await Promise.all([
+        apiFetch<{ items: SupermarketProduct[] }>('/api/rubros/supermarket/catalog'),
+        apiFetch<{ items: Purchase[] }>('/api/rubros/supermarket/purchases'),
+        apiFetch<{ items: StockLot[] }>('/api/rubros/supermarket/lots'),
+      ]);
+      setProducts(catalogResponse.items);
+      setPurchases(purchasesResponse.items);
+      setLots(lotsResponse.items);
+      showFeedback('Mercaderia recibida: stock, costo y lote actualizados.');
+    } catch (error) {
+      showFeedback(error instanceof Error ? error.message : 'No se pudo recibir la compra.');
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const toggleProduct = async (productId: string) => {
+    const product = products.find((item) => item.id === productId);
+    if (!product) return;
+    setSyncing(true);
+    try {
+      const response = await apiFetch<{ item: SupermarketProduct }>('/api/rubros/supermarket/catalog', {
+        method: 'POST',
+        body: JSON.stringify({ ...product, active: product.active === false }),
+      });
+      setProducts((current) => current.map((item) => item.id === productId ? response.item : item));
+      showFeedback(response.item.active ? 'Producto habilitado.' : 'Producto pausado.');
+    } catch (error) {
+      showFeedback(error instanceof Error ? error.message : 'No se pudo cambiar el estado del producto.');
+    } finally {
+      setSyncing(false);
+    }
   };
 
   const tabs: Array<{ id: Area; label: string; icon: typeof ShoppingCart }> = [
@@ -191,7 +267,7 @@ export default function SupermarketWorkspaceConsole() {
 
   return (
     <div className="space-y-4" data-testid="supermarket-workspace">
-      {feedback && <div role="status" className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-800">{feedback}</div>}
+      {(feedback || syncing) && <div role="status" className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-800">{syncing ? 'Sincronizando datos...' : feedback}</div>}
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Metric label="Productos activos" value={String(activeProducts.length)} detail={`${products.length} referencias`} />
         <Metric label="Stock bajo" value={String(lowStock)} detail="Requieren reposicion" warning={lowStock > 0} />
@@ -203,7 +279,7 @@ export default function SupermarketWorkspaceConsole() {
 
       {area === 'pos' && <SupermarketConsole products={activeProducts} onSaleCommitted={commitSale} />}
 
-      {area === 'catalog' && <Catalog products={visibleProducts} allProducts={products} search={search} setSearch={setSearch} filter={filter} setFilter={setFilter} onEdit={(product) => setEditingProduct({ ...product })} onCreate={() => setEditingProduct({ ...EMPTY_PRODUCT })} onToggle={(id) => setProducts((current) => current.map((product) => product.id === id ? { ...product, active: product.active === false } : product))} />}
+      {area === 'catalog' && <Catalog products={visibleProducts} allProducts={products} search={search} setSearch={setSearch} filter={filter} setFilter={setFilter} onEdit={(product) => setEditingProduct({ ...product })} onCreate={() => setEditingProduct({ ...EMPTY_PRODUCT })} onToggle={toggleProduct} />}
 
       {area === 'inventory' && (
         <section className="space-y-4" aria-label="Stock y reposicion">

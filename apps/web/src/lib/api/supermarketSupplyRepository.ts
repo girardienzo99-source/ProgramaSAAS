@@ -1,5 +1,10 @@
 import { ApiError, isUuid } from './core';
-import { listSupermarketProducts, type SupermarketContext } from './supermarketRepository';
+import {
+  listSupermarketProducts,
+  listSupermarketPurchases,
+  saveSupermarketPurchase,
+  type SupermarketContext,
+} from './supermarketRepository';
 import { createAdminServerClient, isServerSupabaseAdminConfigured } from '@/lib/server/supabase';
 
 export interface SupermarketSupplierRecord {
@@ -69,16 +74,49 @@ export interface SupermarketSupplyForecastRecord {
   risk: 'out_of_stock' | 'critical' | 'attention' | 'healthy';
 }
 
+export interface SupermarketPurchaseApprovalPolicy {
+  enabled: boolean;
+  autoApproveLimit: number;
+  secondApprovalThreshold: number;
+}
+
+export type SupermarketPurchaseApprovalStatus = 'pending' | 'approved' | 'auto_approved' | 'rejected';
+
+export interface SupermarketPurchaseApprovalRecord {
+  id: string;
+  orderId: string;
+  orderNumber: number | null;
+  supplierName: string;
+  productName: string;
+  amount: number;
+  requiredApprovals: number;
+  approvalCount: number;
+  status: SupermarketPurchaseApprovalStatus;
+  requestedBy: string;
+  requestedAt: string;
+  resolvedAt: string | null;
+  canDecide: boolean;
+}
+
+interface LocalApproval extends SupermarketPurchaseApprovalRecord { decidedBy: string[] }
+
 interface LocalSupplyState {
   suppliers: Map<string, SupermarketSupplierRecord[]>;
   documents: Map<string, SupermarketSupplierDocumentRecord[]>;
   documentResults: Map<string, { documentId: string; duplicate: boolean; reconciliationStatus: string; difference: number | null }>;
+  approvalPolicies: Map<string, SupermarketPurchaseApprovalPolicy>;
+  approvals: Map<string, LocalApproval[]>;
+  approvalResults: Map<string, { requestId: string; status: SupermarketPurchaseApprovalStatus; requiredApprovals: number; duplicate: boolean }>;
 }
 
 const globalWithSupply = globalThis as typeof globalThis & { __programaSassSupermarketSupply?: LocalSupplyState };
 const localState: LocalSupplyState = globalWithSupply.__programaSassSupermarketSupply ?? {
   suppliers: new Map(), documents: new Map(), documentResults: new Map(),
+  approvalPolicies: new Map(), approvals: new Map(), approvalResults: new Map(),
 };
+localState.approvalPolicies ??= new Map();
+localState.approvals ??= new Map();
+localState.approvalResults ??= new Map();
 globalWithSupply.__programaSassSupermarketSupply = localState;
 
 function productionBranch(context: SupermarketContext): string {
@@ -123,6 +161,18 @@ function mapForecast(item: Record<string, unknown>): SupermarketSupplyForecastRe
     incomingQuantity: Number(item.incoming_quantity), leadDays: Number(item.lead_days),
     daysCover: Number(item.days_cover), suggestedQuantity: Number(item.suggested_quantity),
     turnoverIndex: Number(item.turnover_index), risk: item.risk as SupermarketSupplyForecastRecord['risk'],
+  };
+}
+
+function mapApproval(item: Record<string, unknown>): SupermarketPurchaseApprovalRecord {
+  return {
+    id: String(item.id), orderId: String(item.order_id),
+    orderNumber: item.order_number === null ? null : Number(item.order_number),
+    supplierName: String(item.supplier_name), productName: String(item.product_name),
+    amount: Number(item.amount), requiredApprovals: Number(item.required_approvals),
+    approvalCount: Number(item.approval_count), status: item.status as SupermarketPurchaseApprovalStatus,
+    requestedBy: String(item.requested_by), requestedAt: String(item.requested_at),
+    resolvedAt: item.resolved_at ? String(item.resolved_at) : null, canDecide: item.can_decide === true,
   };
 }
 
@@ -248,4 +298,140 @@ export async function getSupermarketSupplyForecast(context: SupermarketContext, 
       risk: product.stock <= 0 ? 'out_of_stock' : product.stock <= product.minStock ? 'attention' : 'healthy',
     };
   });
+}
+
+const DEFAULT_APPROVAL_POLICY: SupermarketPurchaseApprovalPolicy = {
+  enabled: true, autoApproveLimit: 100000, secondApprovalThreshold: 1000000,
+};
+
+export async function getSupermarketPurchaseApprovalPolicy(context: SupermarketContext): Promise<SupermarketPurchaseApprovalPolicy> {
+  if (isServerSupabaseAdminConfigured) {
+    const { data, error } = await createAdminServerClient().rpc('supermarket_get_purchase_approval_policy', {
+      p_company_id: context.companyId, p_branch_id: productionBranch(context),
+    });
+    if (error) throw new ApiError(503, 'No se pudo consultar la politica de aprobaciones.', 'PURCHASE_APPROVALS_UNAVAILABLE');
+    const item = ((data ?? []) as Array<Record<string, unknown>>)[0] ?? {};
+    return {
+      enabled: item.enabled !== false, autoApproveLimit: Number(item.auto_approve_limit ?? 100000),
+      secondApprovalThreshold: Number(item.second_approval_threshold ?? 1000000),
+    };
+  }
+  if (process.env.NODE_ENV === 'production') persistenceUnavailable();
+  return { ...(localState.approvalPolicies.get(context.companyId) ?? DEFAULT_APPROVAL_POLICY) };
+}
+
+export async function saveSupermarketPurchaseApprovalPolicy(
+  context: SupermarketContext,
+  policy: SupermarketPurchaseApprovalPolicy,
+): Promise<SupermarketPurchaseApprovalPolicy> {
+  if (isServerSupabaseAdminConfigured) {
+    const { error } = await createAdminServerClient().rpc('supermarket_save_purchase_approval_policy', {
+      p_company_id: context.companyId, p_branch_id: productionBranch(context), p_user_id: context.userId,
+      p_enabled: policy.enabled, p_auto_approve_limit: policy.autoApproveLimit,
+      p_second_approval_threshold: policy.secondApprovalThreshold,
+    });
+    if (error?.message.includes('INVALID_APPROVAL_POLICY')) throw new ApiError(400, 'Los limites de aprobacion no son validos.', 'INVALID_APPROVAL_POLICY');
+    if (error) throw new ApiError(503, 'No se pudo guardar la politica de aprobaciones.', 'PURCHASE_APPROVALS_UNAVAILABLE');
+    return getSupermarketPurchaseApprovalPolicy(context);
+  }
+  if (process.env.NODE_ENV === 'production') persistenceUnavailable();
+  localState.approvalPolicies.set(context.companyId, { ...policy });
+  return { ...policy };
+}
+
+export async function listSupermarketPurchaseApprovals(context: SupermarketContext): Promise<SupermarketPurchaseApprovalRecord[]> {
+  if (isServerSupabaseAdminConfigured) {
+    const { data, error } = await createAdminServerClient().rpc('supermarket_list_purchase_approvals', {
+      p_company_id: context.companyId, p_branch_id: productionBranch(context), p_user_id: context.userId,
+    });
+    if (error) throw new ApiError(503, 'No se pudieron consultar las aprobaciones.', 'PURCHASE_APPROVALS_UNAVAILABLE');
+    return ((data ?? []) as Array<Record<string, unknown>>).map(mapApproval);
+  }
+  if (process.env.NODE_ENV === 'production') persistenceUnavailable();
+  return (localState.approvals.get(branchKey(context)) ?? []).map(({ decidedBy, ...item }) => ({
+    ...item, canDecide: item.status === 'pending' && item.requestedBy !== context.userId && !decidedBy.includes(context.userId),
+  }));
+}
+
+async function setLocalPurchaseOrdered(context: SupermarketContext, orderId: string) {
+  const purchase = (await listSupermarketPurchases(context)).find((item) => item.id === orderId);
+  if (!purchase) throw new ApiError(404, 'La compra no existe.', 'PURCHASE_NOT_FOUND');
+  await saveSupermarketPurchase(context, { ...purchase, status: 'ordered' });
+}
+
+export async function requestSupermarketPurchaseApproval(context: SupermarketContext, orderId: string, idempotencyKey: string) {
+  if (isServerSupabaseAdminConfigured) {
+    if (!isUuid(orderId)) throw new ApiError(400, 'La compra no es valida.', 'INVALID_PURCHASE_ID');
+    const { data, error } = await createAdminServerClient().rpc('supermarket_request_purchase_approval', {
+      p_company_id: context.companyId, p_branch_id: productionBranch(context), p_user_id: context.userId,
+      p_order_id: orderId, p_idempotency_key: idempotencyKey,
+    });
+    if (error?.message.includes('PURCHASE_NOT_FOUND')) throw new ApiError(404, 'La compra no existe.', 'PURCHASE_NOT_FOUND');
+    if (error?.message.includes('PURCHASE_NOT_DRAFT')) throw new ApiError(409, 'Solo los borradores pueden enviarse a aprobacion.', 'PURCHASE_NOT_DRAFT');
+    if (error?.message.includes('APPROVAL_ALREADY_PENDING')) throw new ApiError(409, 'La compra ya tiene una aprobacion pendiente.', 'APPROVAL_ALREADY_PENDING');
+    if (error) throw new ApiError(503, 'No se pudo solicitar la aprobacion.', 'PURCHASE_APPROVALS_UNAVAILABLE');
+    return data as { requestId: string; status: SupermarketPurchaseApprovalStatus; requiredApprovals: number; duplicate: boolean };
+  }
+  if (process.env.NODE_ENV === 'production') persistenceUnavailable();
+  const resultKey = `${context.companyId}:${idempotencyKey}`;
+  const previousResult = localState.approvalResults.get(resultKey);
+  if (previousResult) return { ...previousResult, duplicate: true };
+  const purchase = (await listSupermarketPurchases(context)).find((item) => item.id === orderId);
+  if (!purchase) throw new ApiError(404, 'La compra no existe.', 'PURCHASE_NOT_FOUND');
+  if (purchase.status !== 'draft') throw new ApiError(409, 'Solo los borradores pueden enviarse a aprobacion.', 'PURCHASE_NOT_DRAFT');
+  const key = branchKey(context);
+  const current = localState.approvals.get(key) ?? [];
+  const previous = current.find((item) => item.orderId === orderId);
+  if (previous?.status === 'pending') throw new ApiError(409, 'La compra ya tiene una aprobacion pendiente.', 'APPROVAL_ALREADY_PENDING');
+  const policy = await getSupermarketPurchaseApprovalPolicy(context);
+  const amount = purchase.quantity * purchase.unitCost;
+  const requiredApprovals = !policy.enabled || amount <= policy.autoApproveLimit ? 0 : amount >= policy.secondApprovalThreshold ? 2 : 1;
+  const status: SupermarketPurchaseApprovalStatus = requiredApprovals === 0 ? 'auto_approved' : 'pending';
+  const approval: LocalApproval = {
+    id: previous?.id ?? `approval-${crypto.randomUUID()}`, orderId, orderNumber: null,
+    supplierName: purchase.supplier, productName: (await listSupermarketProducts(context)).find((item) => item.id === purchase.productId)?.name ?? 'Producto',
+    amount, requiredApprovals, approvalCount: 0, status, requestedBy: context.userId,
+    requestedAt: new Date().toISOString(), resolvedAt: requiredApprovals === 0 ? new Date().toISOString() : null,
+    canDecide: false, decidedBy: [],
+  };
+  localState.approvals.set(key, previous ? current.map((item) => item.id === approval.id ? approval : item) : [approval, ...current]);
+  if (requiredApprovals === 0) await setLocalPurchaseOrdered(context, orderId);
+  const result = { requestId: approval.id, status, requiredApprovals, duplicate: false };
+  localState.approvalResults.set(resultKey, result);
+  return result;
+}
+
+export async function decideSupermarketPurchaseApproval(
+  context: SupermarketContext,
+  requestId: string,
+  decision: 'approved' | 'rejected',
+  notes: string,
+) {
+  if (isServerSupabaseAdminConfigured) {
+    if (!isUuid(requestId)) throw new ApiError(400, 'La solicitud no es valida.', 'INVALID_APPROVAL_ID');
+    const { data, error } = await createAdminServerClient().rpc('supermarket_decide_purchase_approval', {
+      p_company_id: context.companyId, p_branch_id: productionBranch(context), p_user_id: context.userId,
+      p_request_id: requestId, p_decision: decision, p_notes: notes,
+    });
+    if (error?.message.includes('SELF_APPROVAL_NOT_ALLOWED')) throw new ApiError(409, 'El solicitante no puede aprobar su propia compra.', 'SELF_APPROVAL_NOT_ALLOWED');
+    if (error?.message.includes('APPROVAL_ALREADY_RESOLVED')) throw new ApiError(409, 'La solicitud ya fue resuelta.', 'APPROVAL_ALREADY_RESOLVED');
+    if (error?.message.includes('APPROVAL_NOT_FOUND')) throw new ApiError(404, 'La solicitud no existe.', 'APPROVAL_NOT_FOUND');
+    if (error) throw new ApiError(503, 'No se pudo registrar la decision.', 'PURCHASE_APPROVALS_UNAVAILABLE');
+    return data as { requestId: string; status: SupermarketPurchaseApprovalStatus; approvalCount: number; duplicate: boolean };
+  }
+  if (process.env.NODE_ENV === 'production') persistenceUnavailable();
+  const key = branchKey(context);
+  const current = localState.approvals.get(key) ?? [];
+  const approval = current.find((item) => item.id === requestId);
+  if (!approval) throw new ApiError(404, 'La solicitud no existe.', 'APPROVAL_NOT_FOUND');
+  if (approval.status !== 'pending') throw new ApiError(409, 'La solicitud ya fue resuelta.', 'APPROVAL_ALREADY_RESOLVED');
+  if (approval.requestedBy === context.userId) throw new ApiError(409, 'El solicitante no puede aprobar su propia compra.', 'SELF_APPROVAL_NOT_ALLOWED');
+  if (approval.decidedBy.includes(context.userId)) return { requestId, status: approval.status, approvalCount: approval.approvalCount, duplicate: true };
+  const approvalCount = decision === 'approved' ? approval.approvalCount + 1 : approval.approvalCount;
+  const status: SupermarketPurchaseApprovalStatus = decision === 'rejected' ? 'rejected'
+    : approvalCount >= approval.requiredApprovals ? 'approved' : 'pending';
+  const updated: LocalApproval = { ...approval, approvalCount, status, decidedBy: [...approval.decidedBy, context.userId], resolvedAt: status === 'pending' ? null : new Date().toISOString() };
+  localState.approvals.set(key, current.map((item) => item.id === requestId ? updated : item));
+  if (status === 'approved') await setLocalPurchaseOrdered(context, approval.orderId);
+  return { requestId, status, approvalCount, duplicate: false };
 }

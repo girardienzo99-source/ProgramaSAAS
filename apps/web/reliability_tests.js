@@ -531,6 +531,44 @@ test('supermercado pronostica demanda y concilia cuentas de proveedores', () => 
   assert.match(config, /supermarket#supply/);
 });
 
+test('supermercado exige aprobaciones auditables antes de recibir compras', () => {
+  const migration = fs.readFileSync(
+    path.join(__dirname, '../../packages/database/supabase/migrations/20260718000031_supermarket_purchase_approvals.sql'),
+    'utf8',
+  );
+  const repository = fs.readFileSync(path.join(__dirname, 'src/lib/api/supermarketSupplyRepository.ts'), 'utf8');
+  const approvalsRoute = fs.readFileSync(path.join(__dirname, 'src/app/api/rubros/supermarket/purchase-approvals/route.ts'), 'utf8');
+  const purchasesRoute = fs.readFileSync(path.join(__dirname, 'src/app/api/rubros/supermarket/purchases/route.ts'), 'utf8');
+  const supply = fs.readFileSync(path.join(__dirname, 'src/components/supermarket/SupermarketSupplyConsole.tsx'), 'utf8');
+  const workspace = fs.readFileSync(path.join(__dirname, 'src/components/supermarket/SupermarketWorkspaceConsole.tsx'), 'utf8');
+
+  ['supermarket_purchase_approval_policies', 'supermarket_purchase_approval_requests', 'supermarket_purchase_approval_decisions'].forEach((table) => {
+    assert.match(migration, new RegExp(`CREATE TABLE IF NOT EXISTS public\\.${table}`));
+  });
+  ['supermarket_get_purchase_approval_policy', 'supermarket_save_purchase_approval_policy', 'supermarket_list_purchase_approvals', 'supermarket_request_purchase_approval', 'supermarket_decide_purchase_approval'].forEach((fn) => {
+    assert.match(migration, new RegExp(`FUNCTION public\\.${fn}`));
+    assert.match(repository, new RegExp(`'${fn}'`));
+  });
+  assert.match(migration, /UNIQUE\(company_id, idempotency_key\)/);
+  assert.match(migration, /pg_advisory_xact_lock/);
+  assert.match(migration, /SELF_APPROVAL_NOT_ALLOWED/);
+  assert.match(migration, /v_amount >= v_second_threshold THEN 2/);
+  assert.match(migration, /p_status <> 'draft'/);
+  assert.match(migration, /v_order\.status <> 'ordered'.*PURCHASE_NOT_APPROVED/);
+  assert.match(migration, /public\.jwt_business_type\(\) = 'supermarket'/g);
+  assert.match(approvalsRoute, /supermarket\.purchase_approvals\.read/);
+  assert.match(approvalsRoute, /supermarket\.purchase_approvals\.request/);
+  assert.match(approvalsRoute, /supermarket\.purchase_approvals\.decide/);
+  assert.match(approvalsRoute, /supermarket\.purchase_approvals\.policy/);
+  assert.match(approvalsRoute, /requiredIdempotencyKey/);
+  assert.match(purchasesRoute, /const STATUSES = \['draft'\]/);
+  assert.match(supply, /Politica de autorizacion/);
+  assert.match(supply, /Solicitar aprobacion/);
+  assert.match(supply, /El solicitante nunca puede decidir su propia compra/);
+  assert.match(workspace, /purchase\.status === 'ordered'/);
+  assert.match(fs.readFileSync(path.join(__dirname, 'src/lib/api/supermarketRepository.ts'), 'utf8'), /purchase\.status !== 'ordered'.*PURCHASE_NOT_APPROVED/);
+});
+
 test('supermercado persiste catalogo, compras y lotes con recepcion atomica', () => {
   const migration = fs.readFileSync(
     path.join(__dirname, '../../packages/database/supabase/migrations/20260718000023_supermarket_domain.sql'),

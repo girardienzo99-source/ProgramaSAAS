@@ -16,7 +16,7 @@ import {
   saveSupermarketPurchase,
 } from '@/lib/api/supermarketRepository';
 
-const STATUSES = ['draft', 'ordered'] as const;
+const STATUSES = ['draft'] as const;
 
 function optionalDate(body: Record<string, unknown>, field: string): string {
   const value = optionalString(body, field) ?? '';

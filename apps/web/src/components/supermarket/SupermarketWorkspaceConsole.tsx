@@ -460,8 +460,13 @@ export default function SupermarketWorkspaceConsole() {
     setPurchases((current) => [response.item, ...current.filter((item) => item.id !== response.item.id)]);
   };
 
+  const refreshPurchases = async () => {
+    const response = await apiFetch<{ items: Purchase[] }>('/api/rubros/supermarket/purchases');
+    setPurchases(response.items);
+  };
+
   const receivePurchase = async (purchase: Purchase) => {
-    if (purchase.status === 'received') return;
+    if (purchase.status !== 'ordered') return;
     setSyncing(true);
     try {
       await apiFetch('/api/rubros/supermarket/purchases', {
@@ -548,8 +553,8 @@ export default function SupermarketWorkspaceConsole() {
 
       {area === 'purchases' && (
         <section className="space-y-4" aria-label="Ordenes de compra">
-          <SectionHeader title="Compras a proveedores" detail="Ordenes pendientes y recepcion directa al inventario." action={<button onClick={() => setEditingPurchase({ id: '', supplier: '', productId: products[0]?.id ?? '', quantity: 1, unitCost: products[0]?.cost ?? 0, expectedDate: '', status: 'draft', lotCode: '', expirationDate: '' })} className="flex h-9 items-center gap-2 rounded-md bg-emerald-600 px-4 text-sm font-bold text-white"><Plus className="h-4 w-4" />Nueva compra</button>} />
-          <div className="grid gap-3 lg:grid-cols-2">{purchases.map((purchase) => { const product = products.find((item) => item.id === purchase.productId); return <article key={purchase.id} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm"><div className="flex items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase text-slate-400">{purchase.id}</p><h3 className="font-bold text-slate-900">{product?.name}</h3><p className="text-sm text-slate-500">{purchase.supplier}</p></div><Status value={purchase.status} /></div><div className="mt-4 grid grid-cols-3 gap-3"><Value label="Cantidad" value={String(purchase.quantity)} /><Value label="Costo unit." value={money(purchase.unitCost)} /><Value label="Total" value={money(purchase.quantity * purchase.unitCost)} /></div><div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3"><p className="text-xs text-slate-500">Entrega: {purchase.expectedDate || 'Sin fecha'}</p><div className="flex gap-2">{purchase.status !== 'received' && <button onClick={() => setEditingPurchase({ ...purchase })} aria-label={`Editar ${purchase.id}`} className="rounded-md border border-slate-200 p-2 text-slate-600"><Pencil className="h-4 w-4" /></button>}{purchase.status !== 'received' && <button onClick={() => receivePurchase(purchase)} className="flex items-center gap-2 rounded-md bg-emerald-600 px-3 py-2 text-xs font-bold text-white"><PackageCheck className="h-4 w-4" />Recibir</button>}</div></div></article>; })}</div>
+          <SectionHeader title="Compras a proveedores" detail="Borradores, autorizacion y recepcion controlada al inventario." action={<button onClick={() => setEditingPurchase({ id: '', supplier: '', productId: products[0]?.id ?? '', quantity: 1, unitCost: products[0]?.cost ?? 0, expectedDate: '', status: 'draft', lotCode: '', expirationDate: '' })} className="flex h-9 items-center gap-2 rounded-md bg-emerald-600 px-4 text-sm font-bold text-white"><Plus className="h-4 w-4" />Nueva compra</button>} />
+          <div className="grid gap-3 lg:grid-cols-2">{purchases.map((purchase) => { const product = products.find((item) => item.id === purchase.productId); return <article key={purchase.id} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm"><div className="flex items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase text-slate-400">{purchase.id}</p><h3 className="font-bold text-slate-900">{product?.name}</h3><p className="text-sm text-slate-500">{purchase.supplier}</p></div><Status value={purchase.status} /></div><div className="mt-4 grid grid-cols-3 gap-3"><Value label="Cantidad" value={String(purchase.quantity)} /><Value label="Costo unit." value={money(purchase.unitCost)} /><Value label="Total" value={money(purchase.quantity * purchase.unitCost)} /></div><div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3"><p className="text-xs text-slate-500">Entrega: {purchase.expectedDate || 'Sin fecha'}</p><div className="flex gap-2">{purchase.status === 'draft' && <button onClick={() => setEditingPurchase({ ...purchase })} aria-label={`Editar ${purchase.id}`} className="rounded-md border border-slate-200 p-2 text-slate-600"><Pencil className="h-4 w-4" /></button>}{purchase.status === 'ordered' && <button onClick={() => receivePurchase(purchase)} className="flex items-center gap-2 rounded-md bg-emerald-600 px-3 py-2 text-xs font-bold text-white"><PackageCheck className="h-4 w-4" />Recibir</button>}</div></div></article>; })}</div>
         </section>
       )}
 
@@ -588,7 +593,7 @@ export default function SupermarketWorkspaceConsole() {
 
       {area === 'reports' && <SupermarketReportsConsole branches={branches} />}
 
-      {area === 'supply' && <SupermarketSupplyConsole products={products} purchases={purchases} onCreatePurchase={createSuggestedPurchase} />}
+      {area === 'supply' && <SupermarketSupplyConsole products={products} purchases={purchases} onCreatePurchase={createSuggestedPurchase} onPurchasesChanged={refreshPurchases} />}
 
       {editingProduct && <ProductEditor product={editingProduct} setProduct={setEditingProduct} onImage={uploadImage} onSave={saveProduct} onClose={() => setEditingProduct(null)} />}
       {editingPurchase && <PurchaseEditor purchase={editingPurchase} setPurchase={setEditingPurchase} products={products} onSave={savePurchase} onClose={() => setEditingPurchase(null)} />}

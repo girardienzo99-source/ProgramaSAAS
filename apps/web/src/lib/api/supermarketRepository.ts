@@ -600,6 +600,12 @@ export async function saveSupermarketPurchase(
     if (error?.message.includes('PURCHASE_NOT_EDITABLE')) {
       throw new ApiError(409, 'La compra ya no puede modificarse.', 'PURCHASE_NOT_EDITABLE');
     }
+    if (error?.message.includes('PURCHASE_PENDING_APPROVAL')) {
+      throw new ApiError(409, 'La compra no puede modificarse mientras espera aprobacion.', 'PURCHASE_PENDING_APPROVAL');
+    }
+    if (error?.message.includes('INVALID_PURCHASE')) {
+      throw new ApiError(400, 'La compra debe guardarse como borrador antes de aprobarse.', 'INVALID_PURCHASE');
+    }
     if (error || typeof data !== 'string') throw new ApiError(503, 'No se pudo guardar la compra.', 'SUPERMARKET_PURCHASES_UNAVAILABLE');
     const saved = (await listSupermarketPurchases(context)).find((item) => item.id === data);
     if (!saved) throw new ApiError(503, 'La compra no pudo recuperarse.', 'SUPERMARKET_PURCHASES_UNAVAILABLE');
@@ -630,6 +636,7 @@ export async function receiveSupermarketPurchase(
       p_order_id: orderId,
     });
     if (error?.message.includes('PURCHASE_NOT_FOUND')) throw new ApiError(404, 'La compra no existe.', 'PURCHASE_NOT_FOUND');
+    if (error?.message.includes('PURCHASE_NOT_APPROVED')) throw new ApiError(409, 'La compra debe aprobarse antes de recibir mercaderia.', 'PURCHASE_NOT_APPROVED');
     if (error) throw new ApiError(503, 'No se pudo recibir la compra.', 'SUPERMARKET_PURCHASES_UNAVAILABLE');
     return;
   }
@@ -639,6 +646,7 @@ export async function receiveSupermarketPurchase(
   const purchase = purchases.find((item) => item.id === orderId);
   if (!purchase) throw new ApiError(404, 'La compra no existe.', 'PURCHASE_NOT_FOUND');
   if (purchase.status === 'received') return;
+  if (purchase.status !== 'ordered') throw new ApiError(409, 'La compra debe aprobarse antes de recibir mercaderia.', 'PURCHASE_NOT_APPROVED');
   const products = localProducts(context);
   const product = products.find((item) => item.id === purchase.productId);
   if (!product) throw new ApiError(404, 'El producto no existe.', 'PRODUCT_NOT_FOUND');

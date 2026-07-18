@@ -9,7 +9,10 @@ import {
   CheckCircle2,
   CircleDollarSign,
   ClipboardList,
+  Copy,
+  ExternalLink,
   Gauge,
+  KeyRound,
   Pencil,
   Plus,
   RefreshCw,
@@ -29,8 +32,9 @@ import type {
   SupermarketPurchaseApprovalPolicy,
   SupermarketPurchaseApprovalRecord,
 } from '@/lib/api/supermarketSupplyRepository';
+import type { SupermarketSupplierPortalAccessRecord } from '@/lib/api/supermarketSupplierPortalRepository';
 
-type View = 'forecast' | 'suppliers' | 'accounts' | 'approvals';
+type View = 'forecast' | 'suppliers' | 'accounts' | 'approvals' | 'portal';
 interface ProductOption { id: string; name: string; cost: number }
 interface PurchaseOption { id: string; supplier: string; productId: string; quantity: number; unitCost: number; status: string }
 interface PurchaseInput { supplier: string; productId: string; quantity: number; unitCost: number; expectedDate: string; status: 'draft'; lotCode: string; expirationDate: string }
@@ -51,6 +55,7 @@ export default function SupermarketSupplyConsole({ products, purchases, onCreate
   const [documents, setDocuments] = useState<SupermarketSupplierDocumentRecord[]>([]);
   const [forecast, setForecast] = useState<SupermarketSupplyForecastRecord[]>([]);
   const [approvals, setApprovals] = useState<SupermarketPurchaseApprovalRecord[]>([]);
+  const [portalAccess, setPortalAccess] = useState<SupermarketSupplierPortalAccessRecord[]>([]);
   const [approvalPolicy, setApprovalPolicy] = useState<SupermarketPurchaseApprovalPolicy>({ enabled: true, autoApproveLimit: 100000, secondApprovalThreshold: 1000000 });
   const [lookbackDays, setLookbackDays] = useState(30);
   const [safetyDays, setSafetyDays] = useState(5);
@@ -60,20 +65,24 @@ export default function SupermarketSupplyConsole({ products, purchases, onCreate
   const [showDocument, setShowDocument] = useState(false);
   const [editingPolicy, setEditingPolicy] = useState<SupermarketPurchaseApprovalPolicy | null>(null);
   const [decisionDraft, setDecisionDraft] = useState<{ requestId: string; decision: 'approved' | 'rejected'; notes: string } | null>(null);
+  const [accessDraft, setAccessDraft] = useState<{ supplierId: string; label: string; expiresInDays: number } | null>(null);
+  const [generatedPortalUrl, setGeneratedPortalUrl] = useState('');
   const [loading, setLoading] = useState(true);
   const [feedback, setFeedback] = useState('');
 
   const load = useCallback(async (period = lookbackDays, safety = safetyDays) => {
     setLoading(true);
     try {
-      const [supplierResponse, documentResponse, forecastResponse, approvalResponse] = await Promise.all([
+      const [supplierResponse, documentResponse, forecastResponse, approvalResponse, portalResponse] = await Promise.all([
         apiFetch<{ items: SupermarketSupplierRecord[] }>('/api/rubros/supermarket/suppliers'),
         apiFetch<{ items: SupermarketSupplierDocumentRecord[] }>('/api/rubros/supermarket/supplier-documents'),
         apiFetch<{ items: SupermarketSupplyForecastRecord[] }>(`/api/rubros/supermarket/supply?lookbackDays=${period}&safetyDays=${safety}`),
         apiFetch<{ items: SupermarketPurchaseApprovalRecord[]; policy: SupermarketPurchaseApprovalPolicy }>('/api/rubros/supermarket/purchase-approvals'),
+        apiFetch<{ items: SupermarketSupplierPortalAccessRecord[] }>('/api/rubros/supermarket/supplier-portal-access'),
       ]);
       setSuppliers(supplierResponse.items); setDocuments(documentResponse.items); setForecast(forecastResponse.items);
       setApprovals(approvalResponse.items); setApprovalPolicy(approvalResponse.policy);
+      setPortalAccess(portalResponse.items);
       setFeedback('');
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : 'No se pudo sincronizar el abastecimiento.');
@@ -153,8 +162,26 @@ export default function SupermarketSupplyConsole({ products, purchases, onCreate
     } catch (error) { setFeedback(error instanceof Error ? error.message : 'No se pudo actualizar la politica.'); }
   };
 
+  const createPortalAccess = async () => {
+    if (!accessDraft?.supplierId || !accessDraft.label.trim()) return;
+    try {
+      const response = await apiFetch<{ item: { portalUrl: string } }>('/api/rubros/supermarket/supplier-portal-access', {
+        method: 'POST', body: JSON.stringify(accessDraft),
+      });
+      setAccessDraft(null); setGeneratedPortalUrl(response.item.portalUrl); await load();
+      setFeedback('Acceso externo creado. El enlace se muestra una sola vez.');
+    } catch (error) { setFeedback(error instanceof Error ? error.message : 'No se pudo crear el acceso externo.'); }
+  };
+
+  const revokePortalAccess = async (accessId: string) => {
+    try {
+      await apiFetch('/api/rubros/supermarket/supplier-portal-access', { method: 'PATCH', body: JSON.stringify({ accessId }) });
+      await load(); setFeedback('Acceso externo revocado.');
+    } catch (error) { setFeedback(error instanceof Error ? error.message : 'No se pudo revocar el acceso.'); }
+  };
+
   const tabs: Array<{ id: View; label: string; icon: typeof Gauge }> = [
-    { id: 'forecast', label: 'Reposicion', icon: Gauge }, { id: 'suppliers', label: 'Proveedores', icon: Building2 }, { id: 'accounts', label: 'Conciliacion', icon: ClipboardList }, { id: 'approvals', label: 'Aprobaciones', icon: ShieldCheck },
+    { id: 'forecast', label: 'Reposicion', icon: Gauge }, { id: 'suppliers', label: 'Proveedores', icon: Building2 }, { id: 'accounts', label: 'Conciliacion', icon: ClipboardList }, { id: 'approvals', label: 'Aprobaciones', icon: ShieldCheck }, { id: 'portal', label: 'Portal', icon: KeyRound },
   ];
   const matchingOrders = purchases.filter((purchase) => !documentDraft.supplierId || purchase.supplier.toLowerCase() === suppliers.find((item) => item.id === documentDraft.supplierId)?.name.toLowerCase());
 
@@ -171,12 +198,18 @@ export default function SupermarketSupplyConsole({ products, purchases, onCreate
 
     {view === 'approvals' && <div className="space-y-5"><div className="flex flex-col justify-between gap-3 border-y border-slate-200 bg-slate-50 px-4 py-3 sm:flex-row sm:items-center"><div><div className="flex items-center gap-2"><BadgeCheck className="h-4 w-4 text-emerald-700" /><h3 className="font-bold text-slate-950">Politica de autorizacion</h3></div><p className="mt-1 text-sm text-slate-600">Hasta {money(approvalPolicy.autoApproveLimit)} automatico; desde {money(approvalPolicy.secondApprovalThreshold)} requiere dos aprobadores.</p></div><button onClick={() => setEditingPolicy({ ...approvalPolicy })} className="flex h-9 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-bold text-slate-700"><Settings2 className="h-4 w-4" />Configurar</button></div><div><h3 className="font-bold text-slate-950">Borradores para enviar</h3><p className="text-sm text-slate-500">Las ordenes no pueden recibirse hasta completar este circuito.</p><div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">{purchases.filter((purchase) => purchase.status === 'draft').map((purchase) => { const existing = approvals.find((item) => item.orderId === purchase.id); const waiting = existing?.status === 'pending'; return <article key={purchase.id} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm"><div className="flex items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase text-slate-400">{purchase.id.slice(0, 12)}</p><h4 className="font-bold text-slate-950">{products.find((item) => item.id === purchase.productId)?.name ?? 'Producto'}</h4><p className="text-sm text-slate-500">{purchase.supplier}</p></div>{existing && <ApprovalStatus value={existing.status} />}</div><div className="mt-4 grid grid-cols-2 gap-3"><Value label="Cantidad" value={String(purchase.quantity)} /><Value label="Total" value={money(purchase.quantity * purchase.unitCost)} /></div><button onClick={() => void requestApproval(purchase.id)} disabled={waiting} className="mt-4 flex h-9 w-full items-center justify-center gap-2 rounded-md bg-emerald-600 text-sm font-bold text-white disabled:bg-slate-300"><ShieldCheck className="h-4 w-4" />{waiting ? 'Esperando aprobacion' : existing?.status === 'rejected' ? 'Reenviar a aprobacion' : 'Solicitar aprobacion'}</button></article>; })}</div>{!purchases.some((purchase) => purchase.status === 'draft') && <Empty text="No hay borradores pendientes de envio." />}</div><div><h3 className="mb-3 font-bold text-slate-950">Historial de autorizaciones</h3><div className="overflow-x-auto border border-slate-200 bg-white"><table className="w-full min-w-[920px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="px-4 py-3">Orden</th><th className="px-4 py-3">Compra</th><th className="px-4 py-3 text-right">Importe</th><th className="px-4 py-3">Progreso</th><th className="px-4 py-3">Estado</th><th className="px-4 py-3">Solicitud</th><th className="px-4 py-3"></th></tr></thead><tbody className="divide-y divide-slate-100">{approvals.map((approval) => <tr key={approval.id}><td className="px-4 py-3 font-mono font-bold">{approval.orderNumber ? `#${approval.orderNumber}` : approval.orderId.slice(0, 8)}</td><td className="px-4 py-3"><p className="font-bold text-slate-950">{approval.productName}</p><p className="text-xs text-slate-500">{approval.supplierName}</p></td><td className="px-4 py-3 text-right font-bold">{money(approval.amount)}</td><td className="px-4 py-3">{approval.requiredApprovals === 0 ? 'Automatica' : `${approval.approvalCount} de ${approval.requiredApprovals}`}</td><td className="px-4 py-3"><ApprovalStatus value={approval.status} /></td><td className="px-4 py-3 text-xs text-slate-500">{new Date(approval.requestedAt).toLocaleString('es-AR')}</td><td className="px-4 py-3"><div className="flex justify-end gap-2">{approval.canDecide && <><button onClick={() => setDecisionDraft({ requestId: approval.id, decision: 'rejected', notes: '' })} aria-label="Rechazar compra" className="rounded-md border border-rose-200 p-2 text-rose-700"><XCircle className="h-4 w-4" /></button><button onClick={() => setDecisionDraft({ requestId: approval.id, decision: 'approved', notes: '' })} aria-label="Aprobar compra" className="rounded-md bg-emerald-600 p-2 text-white"><Check className="h-4 w-4" /></button></>}</div></td></tr>)}</tbody></table>{!approvals.length && <Empty text="Todavia no hay solicitudes de aprobacion." />}</div></div></div>}
 
+    {view === 'portal' && <div className="space-y-4"><div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center"><div><h3 className="font-bold text-slate-950">Accesos externos</h3><p className="text-sm text-slate-500">Enlaces temporales por proveedor y sucursal.</p></div><div className="flex gap-2"><a href="/supplier-portal" target="_blank" rel="noreferrer" className="flex h-9 items-center gap-2 rounded-md border border-slate-300 px-3 text-sm font-bold text-slate-700"><ExternalLink className="h-4 w-4" />Abrir portal</a><button onClick={() => setAccessDraft({ supplierId: suppliers.find((item) => item.active)?.id ?? '', label: 'Acceso principal', expiresInDays: 30 })} className="flex h-9 items-center gap-2 rounded-md bg-emerald-600 px-3 text-sm font-bold text-white"><KeyRound className="h-4 w-4" />Nuevo acceso</button></div></div><div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{portalAccess.map((access) => <article key={access.id} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><h4 className="truncate font-bold text-slate-950">{access.supplierName}</h4><p className="truncate text-xs text-slate-500">{access.label}</p></div><span className={`rounded-full px-2 py-1 text-xs font-bold ${access.active ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>{access.active ? 'Activo' : 'Revocado'}</span></div><div className="mt-4 grid grid-cols-2 gap-3"><Value label="Vence" value={new Date(access.expiresAt).toLocaleDateString('es-AR')} /><Value label="Ultimo uso" value={access.lastUsedAt ? new Date(access.lastUsedAt).toLocaleDateString('es-AR') : 'Sin uso'} /></div>{access.active && <button onClick={() => void revokePortalAccess(access.id)} className="mt-4 flex h-9 w-full items-center justify-center gap-2 rounded-md border border-rose-200 text-sm font-bold text-rose-700"><XCircle className="h-4 w-4" />Revocar acceso</button>}</article>)}</div>{!portalAccess.length && <Empty text="Todavia no hay accesos externos." />}</div>}
+
     {editingSupplier && <Modal title={editingSupplier.id ? 'Editar proveedor' : 'Nuevo proveedor'} onClose={() => setEditingSupplier(null)} footer={<><Secondary onClick={() => setEditingSupplier(null)}>Cancelar</Secondary><Primary onClick={() => void saveSupplier()} disabled={!editingSupplier.name.trim()}>Guardar</Primary></>}><div className="grid gap-4 sm:grid-cols-2"><Text label="Nombre" value={editingSupplier.name} set={(value) => setEditingSupplier({ ...editingSupplier, name: value })} wide /><Text label="CUIT" value={editingSupplier.taxId} set={(value) => setEditingSupplier({ ...editingSupplier, taxId: value })} /><Text label="Telefono" value={editingSupplier.phone} set={(value) => setEditingSupplier({ ...editingSupplier, phone: value })} /><Text label="Email" value={editingSupplier.email} set={(value) => setEditingSupplier({ ...editingSupplier, email: value })} /><Text label="Direccion" value={editingSupplier.address} set={(value) => setEditingSupplier({ ...editingSupplier, address: value })} /><NumberField label="Dias de entrega" value={editingSupplier.leadDays} set={(value) => setEditingSupplier({ ...editingSupplier, leadDays: Math.max(0, Number(value)) })} /><NumberField label="Limite de credito" value={editingSupplier.creditLimit} set={(value) => setEditingSupplier({ ...editingSupplier, creditLimit: Math.max(0, Number(value)) })} /></div></Modal>}
 
     {showDocument && <Modal title="Registrar comprobante" onClose={() => setShowDocument(false)} footer={<><Secondary onClick={() => setShowDocument(false)}>Cancelar</Secondary><Primary onClick={() => void postDocument()} disabled={!documentDraft.supplierId || !documentDraft.documentNumber || documentDraft.amount <= 0}>Registrar</Primary></>}><div className="grid gap-4 sm:grid-cols-2"><Select label="Tipo" value={documentDraft.documentType} set={(value) => setDocumentDraft({ ...documentDraft, documentType: value, purchaseOrderId: value === 'invoice' ? documentDraft.purchaseOrderId : '', dueDate: value === 'invoice' ? documentDraft.dueDate : '' })} options={[['invoice', 'Factura'], ['credit_note', 'Nota de credito'], ['payment', 'Pago']]} /><Select label="Proveedor" value={documentDraft.supplierId} set={(value) => setDocumentDraft({ ...documentDraft, supplierId: value, purchaseOrderId: '' })} options={[['', 'Seleccionar'], ...suppliers.filter((item) => item.active).map((item) => [item.id, item.name])]} /><Text label="Numero" value={documentDraft.documentNumber} set={(value) => setDocumentDraft({ ...documentDraft, documentNumber: value })} /><NumberField label="Importe" value={documentDraft.amount} set={(value) => setDocumentDraft({ ...documentDraft, amount: Math.max(0, Number(value)) })} /><Text label="Fecha de emision" value={documentDraft.issueDate} set={(value) => setDocumentDraft({ ...documentDraft, issueDate: value })} /><Text label="Vencimiento" value={documentDraft.dueDate} set={(value) => setDocumentDraft({ ...documentDraft, dueDate: value })} />{documentDraft.documentType === 'invoice' && <Select label="Orden a conciliar" value={documentDraft.purchaseOrderId} set={(value) => setDocumentDraft({ ...documentDraft, purchaseOrderId: value })} options={[['', 'Sin orden'], ...matchingOrders.map((item) => [item.id, `${item.id.slice(0, 8)} · ${money(item.quantity * item.unitCost)}`])]} />}<Text label="Notas" value={documentDraft.notes} set={(value) => setDocumentDraft({ ...documentDraft, notes: value })} wide /></div></Modal>}
     {editingPolicy && <Modal title="Politica de aprobaciones" onClose={() => setEditingPolicy(null)} footer={<><Secondary onClick={() => setEditingPolicy(null)}>Cancelar</Secondary><Primary onClick={() => void saveApprovalPolicy()} disabled={editingPolicy.secondApprovalThreshold <= editingPolicy.autoApproveLimit}>Guardar politica</Primary></>}><div className="space-y-4"><label className="flex h-11 items-center justify-between rounded-md border border-slate-300 px-3 text-sm font-bold text-slate-700">Circuito de aprobacion<input type="checkbox" checked={editingPolicy.enabled} onChange={(event) => setEditingPolicy({ ...editingPolicy, enabled: event.target.checked })} className="h-4 w-4 accent-emerald-600" /></label><div className="grid gap-4 sm:grid-cols-2"><NumberField label="Aprobacion automatica hasta" value={editingPolicy.autoApproveLimit} set={(value) => setEditingPolicy({ ...editingPolicy, autoApproveLimit: Math.max(0, Number(value)) })} /><NumberField label="Doble aprobacion desde" value={editingPolicy.secondApprovalThreshold} set={(value) => setEditingPolicy({ ...editingPolicy, secondApprovalThreshold: Math.max(0, Number(value)) })} /></div><p className="text-xs text-slate-500">Entre ambos limites se requiere un aprobador. El solicitante nunca puede decidir su propia compra.</p></div></Modal>}
 
     {decisionDraft && <Modal title={decisionDraft.decision === 'approved' ? 'Aprobar compra' : 'Rechazar compra'} onClose={() => setDecisionDraft(null)} footer={<><Secondary onClick={() => setDecisionDraft(null)}>Cancelar</Secondary><Primary onClick={() => void decideApproval()}>{decisionDraft.decision === 'approved' ? 'Confirmar aprobacion' : 'Confirmar rechazo'}</Primary></>}><Text label="Observaciones" value={decisionDraft.notes} set={(value) => setDecisionDraft({ ...decisionDraft, notes: value })} wide /></Modal>}
+
+    {accessDraft && <Modal title="Nuevo acceso externo" onClose={() => setAccessDraft(null)} footer={<><Secondary onClick={() => setAccessDraft(null)}>Cancelar</Secondary><Primary onClick={() => void createPortalAccess()} disabled={!accessDraft.supplierId || !accessDraft.label.trim()}>Crear enlace</Primary></>}><div className="grid gap-4 sm:grid-cols-2"><Select label="Proveedor" value={accessDraft.supplierId} set={(value) => setAccessDraft({ ...accessDraft, supplierId: value })} options={suppliers.filter((item) => item.active).map((item) => [item.id, item.name])} /><Text label="Etiqueta" value={accessDraft.label} set={(value) => setAccessDraft({ ...accessDraft, label: value })} /><NumberField label="Vigencia en dias" value={accessDraft.expiresInDays} set={(value) => setAccessDraft({ ...accessDraft, expiresInDays: Math.max(1, Math.min(365, Number(value))) })} /></div></Modal>}
+
+    {generatedPortalUrl && <Modal title="Enlace externo creado" onClose={() => setGeneratedPortalUrl('')} footer={<Primary onClick={() => setGeneratedPortalUrl('')}>Listo</Primary>}><div className="space-y-3"><label><FieldLabel text="Enlace del proveedor" /><div className="flex gap-2"><input readOnly value={generatedPortalUrl} className="h-10 min-w-0 flex-1 rounded-md border border-slate-300 bg-slate-50 px-3 text-sm" /><button onClick={() => void navigator.clipboard.writeText(generatedPortalUrl)} aria-label="Copiar enlace" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-slate-300"><Copy className="h-4 w-4" /></button></div></label><p className="text-xs text-slate-500">Por seguridad, el token no vuelve a mostrarse despues de cerrar esta ventana.</p></div></Modal>}
   </section>;
 }
 

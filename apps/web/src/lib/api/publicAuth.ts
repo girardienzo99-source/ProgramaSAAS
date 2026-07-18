@@ -97,7 +97,7 @@ function consumeLocalRateLimit(keyId: string, now: number): PublicApiAuth['rateL
   };
 }
 
-async function consumeRateLimit(keyHash: string): Promise<PublicApiAuth['rateLimit']> {
+export async function consumePublicRateLimit(keyHash: string): Promise<PublicApiAuth['rateLimit']> {
   if (isServerSupabaseAdminConfigured) {
     const supabase = createAdminServerClient();
     const { data, error } = await supabase.rpc('consume_public_api_rate_limit', {
@@ -135,7 +135,7 @@ export async function validatePublicApiRequest(request: Request): Promise<Public
 
   const keyHash = createHash('sha256').update(token).digest('hex');
   const companyId = await resolveCompanyId(token, keyHash);
-  const rateLimit = await consumeRateLimit(keyHash);
+  const rateLimit = await consumePublicRateLimit(keyHash);
   return { companyId, rateLimit };
 }
 
@@ -144,6 +144,14 @@ export function publicApiHeaders(auth: PublicApiAuth): Headers {
     'X-RateLimit-Limit': String(auth.rateLimit.limit),
     'X-RateLimit-Remaining': String(auth.rateLimit.remaining),
     'X-RateLimit-Reset': String(auth.rateLimit.reset),
+  });
+}
+
+export function publicRateLimitHeaders(rateLimit: PublicApiAuth['rateLimit']): Headers {
+  return new Headers({
+    'X-RateLimit-Limit': String(rateLimit.limit),
+    'X-RateLimit-Remaining': String(rateLimit.remaining),
+    'X-RateLimit-Reset': String(rateLimit.reset),
   });
 }
 

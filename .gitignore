@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.*
+
+# Framework output
+.next/
+out/
+build/
+dist/
+.vercel/
+
+# TypeScript and tooling
+*.tsbuildinfo
+*.map
+
+# Local configuration
+.env
+.env.*
+!.env.example
+*.pem
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+.gh-auth.*.log
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

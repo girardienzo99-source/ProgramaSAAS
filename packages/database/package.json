@@ -1,0 +1,23 @@
+{
+  "name": "@programa-sass/database",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Esquemas de base de datos de Supabase, migraciones, scripts de seeding y políticas RLS",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "supabase:start": "supabase start",
+    "supabase:stop": "supabase stop",
+    "supabase:reset": "supabase db reset",
+    "supabase:link": "supabase link",
+    "supabase:push": "supabase db push",
+    "supabase:pull": "supabase db pull",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.43.4"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5"
+  }
+}

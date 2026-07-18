@@ -1,0 +1,138 @@
+'use client';
+
+import { useEffect, useMemo, useState, type ChangeEvent, type ReactNode } from 'react';
+import {
+  AlertTriangle,
+  Boxes,
+  Camera,
+  CircleDollarSign,
+  FlaskConical,
+  Image as ImageIcon,
+  PackageCheck,
+  Pencil,
+  Plus,
+  Search,
+  Scissors,
+  Sparkles,
+  Users,
+  X,
+} from 'lucide-react';
+import BeautyConsole, { BEAUTY_SERVICES, type BeautyService } from './BeautyConsole';
+
+type Area = 'agenda' | 'services' | 'products' | 'formulas' | 'team' | 'packages';
+type ProductKind = 'consumable' | 'retail';
+
+interface BeautyProduct {
+  id: string;
+  name: string;
+  sku: string;
+  kind: ProductKind;
+  unit: string;
+  stock: number;
+  minStock: number;
+  cost: number;
+  price: number;
+  supplier: string;
+  imageUrl: string | null;
+  active: boolean;
+}
+interface FormulaLine { productId: string; quantity: number }
+interface ServiceFormula { serviceId: string; lines: FormulaLine[] }
+interface TeamMember { id: string; name: string; specialty: string; serviceRate: number; retailRate: number; accrued: number; paid: number }
+interface ClientPackage { id: string; client: string; name: string; totalSessions: number; usedSessions: number; price: number; expiresAt: string; status: 'active' | 'paused' | 'expired' }
+
+const SERVICES: BeautyService[] = BEAUTY_SERVICES.map((service, index) => ({ ...service, cost: [1800, 7200, 9500, 700][index], category: ['Corte', 'Color', 'Tratamiento', 'Estetica'][index], active: true }));
+const PRODUCTS: BeautyProduct[] = [
+  { id: 'bp1', name: 'Shampoo Neutro Profesional', sku: 'BEL-001', kind: 'consumable', unit: 'ml', stock: 6200, minStock: 1500, cost: 8, price: 0, supplier: 'Distribuidora Capilar', imageUrl: null, active: true },
+  { id: 'bp2', name: 'Tintura Tono 7.3', sku: 'BEL-002', kind: 'consumable', unit: 'g', stock: 780, minStock: 300, cost: 42, price: 0, supplier: 'Color Pro', imageUrl: null, active: true },
+  { id: 'bp3', name: 'Oxidante 20 Vol', sku: 'BEL-003', kind: 'consumable', unit: 'ml', stock: 900, minStock: 500, cost: 10, price: 0, supplier: 'Color Pro', imageUrl: null, active: true },
+  { id: 'bp4', name: 'Keratina Profesional', sku: 'BEL-004', kind: 'consumable', unit: 'ml', stock: 420, minStock: 300, cost: 75, price: 0, supplier: 'Keratin Lab', imageUrl: null, active: true },
+  { id: 'bp5', name: 'Serum Argan 60ml', sku: 'BEL-005', kind: 'retail', unit: 'unidad', stock: 9, minStock: 6, cost: 5200, price: 9500, supplier: 'Distribuidora Capilar', imageUrl: null, active: true },
+  { id: 'bp6', name: 'Shampoo Care Color 300ml', sku: 'BEL-006', kind: 'retail', unit: 'unidad', stock: 4, minStock: 8, cost: 6800, price: 12500, supplier: 'Color Pro', imageUrl: null, active: true },
+];
+const FORMULAS: ServiceFormula[] = [
+  { serviceId: 's1', lines: [{ productId: 'bp1', quantity: 20 }] },
+  { serviceId: 's2', lines: [{ productId: 'bp1', quantity: 25 }, { productId: 'bp2', quantity: 60 }, { productId: 'bp3', quantity: 60 }] },
+  { serviceId: 's3', lines: [{ productId: 'bp1', quantity: 30 }, { productId: 'bp4', quantity: 90 }] },
+];
+const TEAM: TeamMember[] = [
+  { id: 'st1', name: 'Sofia Martinez', specialty: 'Colorista', serviceRate: 40, retailRate: 10, accrued: 68400, paid: 42000 },
+  { id: 'st2', name: 'Claudio Barber', specialty: 'Barberia y corte', serviceRate: 35, retailRate: 8, accrued: 39100, paid: 25000 },
+  { id: 'st3', name: 'Valentina Ruiz', specialty: 'Estetica', serviceRate: 38, retailRate: 10, accrued: 27600, paid: 18000 },
+];
+const PACKAGES: ClientPackage[] = [
+  { id: 'pk1', client: 'Clara Vignolo', name: 'Color Care x4', totalSessions: 4, usedSessions: 1, price: 82000, expiresAt: '2026-11-30', status: 'active' },
+  { id: 'pk2', client: 'Florencia Luna', name: 'Cejas Mensual', totalSessions: 6, usedSessions: 3, price: 22500, expiresAt: '2026-09-30', status: 'active' },
+];
+const EMPTY_SERVICE: BeautyService = { id: '', name: '', price: 0, durationMins: 30, cost: 0, category: 'Corte', active: true };
+const EMPTY_PRODUCT: BeautyProduct = { id: '', name: '', sku: '', kind: 'consumable', unit: 'unidad', stock: 0, minStock: 0, cost: 0, price: 0, supplier: '', imageUrl: null, active: true };
+const money = (value: number) => `$${Math.round(value).toLocaleString('es-AR')}`;
+
+export default function BeautyWorkspaceConsole() {
+  const [area, setArea] = useState<Area>('agenda');
+  const [services, setServices] = useState<BeautyService[]>(SERVICES);
+  const [products, setProducts] = useState<BeautyProduct[]>(PRODUCTS);
+  const [formulas, setFormulas] = useState<ServiceFormula[]>(FORMULAS);
+  const [team, setTeam] = useState<TeamMember[]>(TEAM);
+  const [packages, setPackages] = useState<ClientPackage[]>(PACKAGES);
+  const [editingService, setEditingService] = useState<BeautyService | null>(null);
+  const [editingProduct, setEditingProduct] = useState<BeautyProduct | null>(null);
+  const [selectedFormulaService, setSelectedFormulaService] = useState('s2');
+  const [search, setSearch] = useState('');
+  const [feedback, setFeedback] = useState('');
+
+  useEffect(() => { const sync = () => { const hash = window.location.hash.slice(1) as Area; if (['agenda', 'services', 'products', 'formulas', 'team', 'packages'].includes(hash)) setArea(hash); }; sync(); window.addEventListener('hashchange', sync); return () => window.removeEventListener('hashchange', sync); }, []);
+  const notify = (message: string) => { setFeedback(message); window.setTimeout(() => setFeedback(''), 3000); };
+  const navigate = (next: Area) => { setArea(next); window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#${next}`); };
+  const activeServices = useMemo(() => services.filter((service) => service.active !== false), [services]);
+  const visibleProducts = useMemo(() => products.filter((product) => `${product.name} ${product.sku} ${product.supplier}`.toLowerCase().includes(search.toLowerCase())), [products, search]);
+  const lowStock = products.filter((product) => product.stock <= product.minStock).length;
+  const inventoryValue = products.reduce((sum, product) => sum + product.stock * product.cost, 0);
+  const pendingCommissions = team.reduce((sum, member) => sum + member.accrued - member.paid, 0);
+
+  const completeService = (serviceId: string) => {
+    const formula = formulas.find((item) => item.serviceId === serviceId);
+    if (formula) setProducts((current) => current.map((product) => { const line = formula.lines.find((item) => item.productId === product.id); return line ? { ...product, stock: Math.max(0, Number((product.stock - line.quantity).toFixed(2))) } : product; }));
+    notify('Servicio cobrado y consumos de formula descontados.');
+  };
+  const saveService = () => { if (!editingService?.name.trim()) return; const isNew = !editingService.id; const saved = { ...editingService, id: editingService.id || `s-${Date.now()}` }; setServices((current) => isNew ? [saved, ...current] : current.map((service) => service.id === saved.id ? saved : service)); setEditingService(null); notify('Servicio guardado.'); };
+  const saveProduct = () => { if (!editingProduct?.name.trim()) return; const isNew = !editingProduct.id; const saved = { ...editingProduct, id: editingProduct.id || `bp-${Date.now()}`, sku: editingProduct.sku || `BEL-${products.length + 1}` }; setProducts((current) => isNew ? [saved, ...current] : current.map((product) => product.id === saved.id ? saved : product)); setEditingProduct(null); notify('Producto guardado.'); };
+  const uploadImage = (event: ChangeEvent<HTMLInputElement>) => { const file = event.target.files?.[0]; if (!file || !editingProduct) return; if (file.size > 3 * 1024 * 1024) return notify('La imagen supera el limite de 3 MB.'); const reader = new FileReader(); reader.onload = () => setEditingProduct((current) => current ? { ...current, imageUrl: String(reader.result) } : current); reader.readAsDataURL(file); };
+  const activeFormula = formulas.find((formula) => formula.serviceId === selectedFormulaService);
+  const formulaCost = (activeFormula?.lines ?? []).reduce((sum, line) => sum + (products.find((product) => product.id === line.productId)?.cost ?? 0) * line.quantity, 0);
+  const updateFormula = (productId: string, quantity: number) => setFormulas((current) => current.map((formula) => formula.serviceId === selectedFormulaService ? { ...formula, lines: formula.lines.map((line) => line.productId === productId ? { ...line, quantity: Math.max(0, quantity) } : line) } : formula));
+  const addFormulaLine = () => { const available = products.find((product) => product.kind === 'consumable' && !activeFormula?.lines.some((line) => line.productId === product.id)); if (!available) return; if (!activeFormula) setFormulas((current) => [...current, { serviceId: selectedFormulaService, lines: [{ productId: available.id, quantity: 0 }] }]); else setFormulas((current) => current.map((formula) => formula.serviceId === selectedFormulaService ? { ...formula, lines: [...formula.lines, { productId: available.id, quantity: 0 }] } : formula)); };
+  const tabs: Array<{ id: Area; label: string; icon: typeof Scissors }> = [
+    { id: 'agenda', label: 'Agenda y caja', icon: Scissors }, { id: 'services', label: 'Servicios', icon: Sparkles }, { id: 'products', label: 'Productos e insumos', icon: Boxes }, { id: 'formulas', label: 'Formulas y consumos', icon: FlaskConical }, { id: 'team', label: 'Equipo y comisiones', icon: Users }, { id: 'packages', label: 'Paquetes y membresias', icon: PackageCheck },
+  ];
+  return <div className="space-y-4" data-testid="beauty-workspace">
+    {feedback && <div role="status" className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-800">{feedback}</div>}
+    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"><Metric label="Servicios activos" value={String(activeServices.length)} detail={`${services.length} servicios configurados`} /><Metric label="Stock critico" value={String(lowStock)} detail="Productos a reponer" warning={lowStock > 0} /><Metric label="Inventario a costo" value={money(inventoryValue)} detail="Consumo y venta minorista" /><Metric label="Comisiones pendientes" value={money(pendingCommissions)} detail={`${team.length} profesionales`} /></div>
+    <div className="overflow-x-auto border-b border-slate-200" role="tablist" aria-label="Gestion de salon"><div className="flex min-w-max gap-1">{tabs.map(({ id, label, icon: Icon }) => <button key={id} role="tab" aria-selected={area === id} onClick={() => navigate(id)} className={`flex h-11 items-center gap-2 border-b-2 px-4 text-sm font-semibold ${area === id ? 'border-pink-600 text-pink-700' : 'border-transparent text-slate-500'}`}><Icon className="h-4 w-4" />{label}</button>)}</div></div>
+    {area === 'agenda' && <BeautyConsole services={activeServices} onServiceCompleted={completeService} />}
+    {area === 'services' && <Services services={services} onCreate={() => setEditingService({ ...EMPTY_SERVICE })} onEdit={(service) => setEditingService({ ...service })} onToggle={(id) => setServices((current) => current.map((service) => service.id === id ? { ...service, active: service.active === false } : service))} />}
+    {area === 'products' && <Products products={visibleProducts} search={search} setSearch={setSearch} onCreate={() => setEditingProduct({ ...EMPTY_PRODUCT })} onEdit={(product) => setEditingProduct({ ...product })} />}
+    {area === 'formulas' && <Formulas services={services} products={products} selected={selectedFormulaService} setSelected={setSelectedFormulaService} formula={activeFormula} formulaCost={formulaCost} update={updateFormula} add={addFormulaLine} />}
+    {area === 'team' && <Team members={team} onPay={(id) => { setTeam((current) => current.map((member) => member.id === id ? { ...member, paid: member.accrued } : member)); notify('Liquidacion de comision registrada.'); }} />}
+    {area === 'packages' && <Packages items={packages} onUse={(id) => setPackages((current) => current.map((item) => item.id === id ? { ...item, usedSessions: Math.min(item.totalSessions, item.usedSessions + 1) } : item))} />}
+    {editingService && <ServiceEditor service={editingService} setService={setEditingService} onSave={saveService} onClose={() => setEditingService(null)} />}
+    {editingProduct && <ProductEditor product={editingProduct} setProduct={setEditingProduct} onImage={uploadImage} onSave={saveProduct} onClose={() => setEditingProduct(null)} />}
+  </div>;
+}
+
+function Services({ services, onCreate, onEdit, onToggle }: { services: BeautyService[]; onCreate: () => void; onEdit: (service: BeautyService) => void; onToggle: (id: string) => void }) { return <section className="space-y-4" aria-label="Catalogo de servicios"><Header title="Servicios del salon" detail="Duracion, costo, precio y disponibilidad." action={<button onClick={onCreate} className="flex h-9 items-center gap-2 rounded-md bg-pink-600 px-4 text-sm font-bold text-white"><Plus className="h-4 w-4" />Nuevo servicio</button>} /><div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{services.map((service) => { const margin = service.price ? (service.price - (service.cost ?? 0)) / service.price * 100 : 0; return <article key={service.id} className="rounded-lg border border-slate-200 bg-white p-4"><div className="flex justify-between gap-3"><div><p className="text-xs font-bold text-pink-600">{service.category}</p><h3 className="font-bold text-slate-900">{service.name}</h3><p className="text-xs text-slate-500">{service.durationMins} minutos</p></div><button onClick={() => onEdit(service)} aria-label={`Editar ${service.name}`} className="rounded-md border border-slate-200 p-2"><Pencil className="h-4 w-4" /></button></div><div className="mt-4 grid grid-cols-3 gap-2"><Value label="Precio" value={money(service.price)} /><Value label="Costo" value={money(service.cost ?? 0)} /><Value label="Margen" value={`${margin.toFixed(0)}%`} /></div><button onClick={() => onToggle(service.id)} className={`mt-4 rounded-full px-2 py-1 text-xs font-bold ${service.active !== false ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600'}`}>{service.active !== false ? 'Activo' : 'Pausado'}</button></article>; })}</div></section>; }
+function Products({ products, search, setSearch, onCreate, onEdit }: { products: BeautyProduct[]; search: string; setSearch: (value: string) => void; onCreate: () => void; onEdit: (product: BeautyProduct) => void }) { return <section className="space-y-4" aria-label="Productos e insumos"><div className="flex flex-col gap-3 sm:flex-row"><label className="relative flex-1"><Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar producto, SKU o proveedor" className="h-9 w-full rounded-md border border-slate-300 pl-9 pr-3 text-sm" /></label><button onClick={onCreate} className="flex h-9 items-center justify-center gap-2 rounded-md bg-pink-600 px-4 text-sm font-bold text-white"><Plus className="h-4 w-4" />Nuevo producto</button></div><div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{products.map((product) => <article key={product.id} className="overflow-hidden rounded-lg border border-slate-200 bg-white"><div className="flex h-28 items-center justify-center bg-slate-100">{product.imageUrl ? <img src={product.imageUrl} alt={product.name} className="h-full w-full object-cover" /> : <ImageIcon className="h-9 w-9 text-slate-300" />}</div><div className="space-y-3 p-4"><div className="flex justify-between"><div><p className="text-xs font-bold text-pink-600">{product.kind === 'retail' ? 'Venta al publico' : 'Consumo interno'}</p><h3 className="font-bold text-slate-900">{product.name}</h3><p className="text-xs text-slate-500">{product.sku} · {product.supplier}</p></div><button onClick={() => onEdit(product)} aria-label={`Editar ${product.name}`} className="rounded-md border border-slate-200 p-2"><Pencil className="h-4 w-4" /></button></div><div className="grid grid-cols-3 gap-2"><Value label="Stock" value={`${product.stock} ${product.unit}`} /><Value label="Costo" value={money(product.cost)} /><Value label="Precio" value={product.price ? money(product.price) : '-'} /></div>{product.stock <= product.minStock && <p className="text-xs font-bold text-amber-700"><AlertTriangle className="mr-1 inline h-4 w-4" />Reponer: minimo {product.minStock}</p>}</div></article>)}</div></section>; }
+function Formulas({ services, products, selected, setSelected, formula, formulaCost, update, add }: { services: BeautyService[]; products: BeautyProduct[]; selected: string; setSelected: (value: string) => void; formula?: ServiceFormula; formulaCost: number; update: (id: string, qty: number) => void; add: () => void }) { const service = services.find((item) => item.id === selected); return <section className="grid gap-4 lg:grid-cols-[280px_1fr]" aria-label="Formulas de servicios"><div className="rounded-lg border border-slate-200 bg-white p-4"><h2 className="mb-3 font-bold">Servicios</h2>{services.map((item) => <button key={item.id} onClick={() => setSelected(item.id)} className={`mb-1 w-full rounded-md px-3 py-2 text-left text-sm ${selected === item.id ? 'bg-pink-50 font-bold text-pink-700' : 'text-slate-700'}`}>{item.name}</button>)}</div><div className="rounded-lg border border-slate-200 bg-white p-5"><div className="flex justify-between"><div><p className="text-xs font-bold uppercase text-pink-600">Formula tecnica</p><h2 className="font-bold text-slate-900">{service?.name}</h2></div><Value label="Costo calculado" value={money(formulaCost)} /></div><div className="mt-4 overflow-x-auto"><table className="w-full min-w-[520px] text-sm"><thead className="bg-slate-50 text-left text-xs uppercase text-slate-500"><tr><th className="px-3 py-2">Producto</th><th className="px-3 py-2">Cantidad</th><th className="px-3 py-2">Costo</th></tr></thead><tbody className="divide-y divide-slate-100">{(formula?.lines ?? []).map((line) => { const product = products.find((item) => item.id === line.productId); return <tr key={line.productId}><td className="px-3 py-3 font-bold">{product?.name}</td><td className="px-3 py-3"><input aria-label={`Cantidad de ${product?.name}`} type="number" min="0" value={line.quantity} onChange={(event) => update(line.productId, Number(event.target.value))} className="h-8 w-24 rounded-md border border-slate-300 px-2" /> <span className="text-slate-500">{product?.unit}</span></td><td className="px-3 py-3">{money((product?.cost ?? 0) * line.quantity)}</td></tr>; })}</tbody></table></div><button onClick={add} className="mt-4 flex h-9 items-center gap-2 rounded-md border border-slate-300 px-3 text-sm font-bold"><Plus className="h-4 w-4" />Agregar insumo</button></div></section>; }
+function Team({ members, onPay }: { members: TeamMember[]; onPay: (id: string) => void }) { return <section className="space-y-4" aria-label="Comisiones del equipo"><Header title="Equipo y comisiones" detail="Comisiones por servicio, venta y liquidaciones." /><div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{members.map((member) => <article key={member.id} className="rounded-lg border border-slate-200 bg-white p-4"><h3 className="font-bold text-slate-900">{member.name}</h3><p className="text-xs text-slate-500">{member.specialty}</p><div className="mt-4 grid grid-cols-2 gap-3"><Value label="Servicios" value={`${member.serviceRate}%`} /><Value label="Productos" value={`${member.retailRate}%`} /><Value label="Acumulado" value={money(member.accrued)} /><Value label="Pendiente" value={money(member.accrued - member.paid)} /></div><button onClick={() => onPay(member.id)} disabled={member.paid >= member.accrued} className="mt-4 h-9 w-full rounded-md border border-slate-300 text-sm font-bold disabled:bg-emerald-50 disabled:text-emerald-700">{member.paid >= member.accrued ? 'Liquidado' : 'Liquidar comision'}</button></article>)}</div></section>; }
+function Packages({ items, onUse }: { items: ClientPackage[]; onUse: (id: string) => void }) { return <section className="space-y-4" aria-label="Paquetes y membresias"><Header title="Paquetes y membresias" detail="Sesiones prepagas, vigencia y uso por cliente." action={<button className="flex h-9 items-center gap-2 rounded-md bg-pink-600 px-4 text-sm font-bold text-white"><Plus className="h-4 w-4" />Nuevo paquete</button>} /><div className="grid gap-3 md:grid-cols-2">{items.map((item) => { const remaining = item.totalSessions - item.usedSessions; return <article key={item.id} className="rounded-lg border border-slate-200 bg-white p-4"><div className="flex justify-between"><div><h3 className="font-bold text-slate-900">{item.name}</h3><p className="text-sm text-slate-500">{item.client}</p></div><span className="rounded-full bg-emerald-100 px-2 py-1 text-xs font-bold text-emerald-700">{item.status === 'active' ? 'Activo' : item.status}</span></div><div className="mt-4 grid grid-cols-3 gap-3"><Value label="Disponibles" value={`${remaining}/${item.totalSessions}`} /><Value label="Valor" value={money(item.price)} /><Value label="Vence" value={item.expiresAt} /></div><div className="mt-3 h-2 rounded-full bg-slate-100"><div className="h-full rounded-full bg-pink-500" style={{ width: `${item.usedSessions / item.totalSessions * 100}%` }} /></div><button onClick={() => onUse(item.id)} disabled={!remaining} className="mt-4 h-9 w-full rounded-md border border-slate-300 text-sm font-bold disabled:opacity-40">Registrar sesion</button></article>; })}</div></section>; }
+
+function ServiceEditor({ service, setService, onSave, onClose }: { service: BeautyService; setService: (value: BeautyService | null) => void; onSave: () => void; onClose: () => void }) { return <Modal title={service.id ? 'Editar servicio' : 'Nuevo servicio'} onClose={onClose} footer={<><Cancel onClick={onClose} /><button onClick={onSave} className="h-9 rounded-md bg-pink-600 px-4 text-sm font-bold text-white">Guardar servicio</button></>}><div className="grid gap-4 sm:grid-cols-2"><Text label="Nombre" value={service.name} set={(value) => setService({ ...service, name: value })} wide /><Text label="Categoria" value={service.category ?? ''} set={(value) => setService({ ...service, category: value })} /><Num label="Duracion minutos" value={service.durationMins} set={(value) => setService({ ...service, durationMins: Number(value) })} /><Num label="Precio" value={service.price} set={(value) => setService({ ...service, price: Number(value) })} /><Num label="Costo estimado" value={service.cost ?? 0} set={(value) => setService({ ...service, cost: Number(value) })} /></div></Modal>; }
+function ProductEditor({ product, setProduct, onImage, onSave, onClose }: { product: BeautyProduct; setProduct: (value: BeautyProduct | null) => void; onImage: (event: ChangeEvent<HTMLInputElement>) => void; onSave: () => void; onClose: () => void }) { return <Modal title={product.id ? 'Editar producto' : 'Nuevo producto'} onClose={onClose} footer={<><Cancel onClick={onClose} /><button onClick={onSave} className="h-9 rounded-md bg-pink-600 px-4 text-sm font-bold text-white">Guardar producto</button></>}><div className="grid gap-4 sm:grid-cols-2"><label className="sm:col-span-2"><Label text="Imagen" /><div className="flex items-center gap-4"><div className="flex h-24 w-32 items-center justify-center overflow-hidden rounded-md bg-slate-100">{product.imageUrl ? <img src={product.imageUrl} alt="Vista previa" className="h-full w-full object-cover" /> : <Camera className="h-7 w-7 text-slate-300" />}</div><label className="cursor-pointer rounded-md border border-slate-300 px-3 py-2 text-sm font-bold">Subir imagen<input type="file" accept="image/*" onChange={onImage} className="sr-only" /></label></div></label><Text label="Nombre" value={product.name} set={(value) => setProduct({ ...product, name: value })} wide /><Text label="SKU" value={product.sku} set={(value) => setProduct({ ...product, sku: value })} /><Text label="Proveedor" value={product.supplier} set={(value) => setProduct({ ...product, supplier: value })} /><Text label="Unidad" value={product.unit} set={(value) => setProduct({ ...product, unit: value })} /><label><Label text="Tipo" /><select value={product.kind} onChange={(event) => setProduct({ ...product, kind: event.target.value as ProductKind })} className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm"><option value="consumable">Consumo interno</option><option value="retail">Venta al publico</option></select></label><Num label="Stock" value={product.stock} set={(value) => setProduct({ ...product, stock: Number(value) })} /><Num label="Stock minimo" value={product.minStock} set={(value) => setProduct({ ...product, minStock: Number(value) })} /><Num label="Costo unitario" value={product.cost} set={(value) => setProduct({ ...product, cost: Number(value) })} /><Num label="Precio de venta" value={product.price} set={(value) => setProduct({ ...product, price: Number(value) })} /></div></Modal>; }
+function Modal({ title, onClose, footer, children }: { title: string; onClose: () => void; footer: ReactNode; children: ReactNode }) { return <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/50 sm:items-center sm:p-4" role="dialog" aria-modal="true" aria-label={title}><div className="max-h-[94vh] w-full max-w-2xl overflow-y-auto rounded-t-lg bg-white sm:rounded-lg"><div className="flex items-center justify-between border-b border-slate-200 px-5 py-4"><h2 className="font-bold">{title}</h2><button onClick={onClose} aria-label="Cerrar" className="p-2"><X className="h-5 w-5" /></button></div><div className="p-5">{children}</div><div className="flex justify-end gap-2 border-t border-slate-200 px-5 py-4">{footer}</div></div></div>; }
+function Header({ title, detail, action }: { title: string; detail: string; action?: ReactNode }) { return <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center"><div><h2 className="font-bold text-slate-900">{title}</h2><p className="text-sm text-slate-500">{detail}</p></div>{action}</div>; }
+function Metric({ label, value, detail, warning = false }: { label: string; value: string; detail: string; warning?: boolean }) { return <div className="rounded-lg border border-slate-200 bg-white p-4"><p className="text-xs font-semibold text-slate-500">{label}</p><p className={`mt-1 text-2xl font-bold ${warning ? 'text-amber-700' : 'text-slate-900'}`}>{value}</p><p className="mt-1 text-xs text-slate-500">{detail}</p></div>; }
+function Value({ label, value }: { label: string; value: string }) { return <div><p className="text-[10px] font-bold uppercase text-slate-400">{label}</p><p className="mt-0.5 font-bold text-slate-900">{value}</p></div>; }
+function Label({ text }: { text: string }) { return <span className="mb-1.5 block text-xs font-bold text-slate-600">{text}</span>; }
+function Text({ label, value, set, wide = false }: { label: string; value: string; set: (value: string) => void; wide?: boolean }) { return <label className={wide ? 'sm:col-span-2' : ''}><Label text={label} /><input value={value} onChange={(event) => set(event.target.value)} className="h-9 w-full rounded-md border border-slate-300 px-3 text-sm" /></label>; }
+function Num({ label, value, set }: { label: string; value: number; set: (value: string) => void }) { return <label><Label text={label} /><input type="number" min="0" step="0.01" value={value} onChange={(event) => set(event.target.value)} className="h-9 w-full rounded-md border border-slate-300 px-3 text-sm" /></label>; }
+function Cancel({ onClick }: { onClick: () => void }) { return <button onClick={onClick} className="h-9 rounded-md border border-slate-300 px-4 text-sm font-bold">Cancelar</button>; }

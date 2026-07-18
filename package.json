@@ -1,0 +1,19 @@
+{
+  "name": "programa-sass-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Plataforma SaaS Multiempresa y Multirubro para Argentina y Latinoamérica",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspaces --if-present",
+    "build": "npm run build -w @programa-sass/shared-types && npm run build -w @programa-sass/database && npm run build -w @programa-sass/arca-client && npm run build -w @programa-sass/web",
+    "test": "npm run test --workspaces --if-present"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5",
+    "prettier": "^3.2.5"
+  }
+}

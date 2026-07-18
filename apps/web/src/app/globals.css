@@ -1,0 +1,188 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f6f8fb;
+  --foreground: #172033;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--background);
+  color-scheme: light;
+}
+
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+  overflow-x: hidden;
+}
+
+button,
+a,
+input,
+select,
+textarea {
+  outline-offset: 2px;
+}
+
+:focus-visible {
+  outline: 2px solid #2563eb;
+}
+
+::selection {
+  background: #bfdbfe;
+  color: #172033;
+}
+
+.scrollbar-none {
+  scrollbar-width: none;
+}
+
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
+/* Compatibility theme for the existing operational consoles. */
+.app-theme [class~="bg-slate-950"],
+.app-theme [class~="bg-slate-950/40"],
+.app-theme [class~="bg-slate-950/50"],
+.app-theme [class~="bg-slate-950/60"],
+.app-theme [class~="bg-slate-950/80"] {
+  background-color: #f8fafc !important;
+}
+
+.app-theme [class~="bg-slate-900"],
+.app-theme [class~="bg-slate-900/10"],
+.app-theme [class~="bg-slate-900/20"],
+.app-theme [class~="bg-slate-900/40"],
+.app-theme [class~="bg-slate-900/50"],
+.app-theme [class~="bg-slate-900/60"],
+.app-theme [class~="bg-slate-900/80"] {
+  background-color: #ffffff !important;
+}
+
+.app-theme [class~="bg-slate-850"],
+.app-theme [class~="bg-slate-850/50"],
+.app-theme [class~="bg-slate-800"],
+.app-theme [class~="bg-slate-800/50"] {
+  background-color: #f1f5f9 !important;
+}
+
+.app-theme [class~="border-slate-900"],
+.app-theme [class~="border-slate-850"],
+.app-theme [class~="border-slate-855"],
+.app-theme [class~="border-slate-800"],
+.app-theme [class~="border-slate-800/40"],
+.app-theme [class~="border-slate-800/80"],
+.app-theme [class~="border-slate-700"] {
+  border-color: #dbe3ee !important;
+}
+
+.app-theme [class~="text-white"],
+.app-theme [class~="text-slate-100"],
+.app-theme [class~="text-slate-200"] {
+  color: #172033 !important;
+}
+
+.app-theme [class~="text-slate-300"],
+.app-theme [class~="text-slate-350"],
+.app-theme [class~="text-slate-355"],
+.app-theme [class~="text-slate-400"],
+.app-theme [class~="text-slate-455"] {
+  color: #475569 !important;
+}
+
+.app-theme [class~="text-slate-500"],
+.app-theme [class~="text-slate-600"],
+.app-theme [class~="text-slate-650"] {
+  color: #64748b !important;
+}
+
+.app-theme [class~="bg-clip-text"][class~="text-transparent"] {
+  background-image: none !important;
+  color: #172033 !important;
+}
+
+.app-theme [class*="bg-blue-"][class~="text-white"],
+.app-theme [class*="bg-cyan-"][class~="text-white"],
+.app-theme [class*="bg-indigo-"][class~="text-white"],
+.app-theme [class*="bg-emerald-"][class~="text-white"],
+.app-theme [class*="bg-red-"][class~="text-white"],
+.app-theme [class*="bg-rose-"][class~="text-white"],
+.app-theme [class*="bg-amber-"][class~="text-white"],
+.app-theme .ui-brand-mark {
+  color: #ffffff !important;
+}
+
+.app-theme [class~="fixed"][class~="inset-0"][class~="bg-slate-950/80"],
+.app-theme [class~="fixed"][class~="inset-0"][class~="bg-slate-950/70"] {
+  background-color: rgb(15 23 42 / 0.58) !important;
+}
+
+.app-theme [class~="rounded-3xl"],
+.app-theme [class~="rounded-2xl"],
+.app-theme [class~="rounded-xl"] {
+  border-radius: 8px !important;
+}
+
+.app-theme input,
+.app-theme select,
+.app-theme textarea {
+  color-scheme: light;
+}
+
+.app-theme * {
+  letter-spacing: 0 !important;
+}
+
+.app-theme main section,
+.app-theme main [class~="grid"] > *,
+.app-theme main [class~="flex"] > * {
+  min-width: 0;
+}
+
+.app-theme main [class~="flex"][class~="border-b"] {
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+.app-theme main [class~="flex"][class~="border-b"] > button,
+.app-theme main [class~="flex"][class~="border-b"] > a {
+  flex-shrink: 0;
+  min-width: max-content;
+  white-space: nowrap;
+}
+
+.app-theme main [class~="flex"][class~="sm:w-auto"] {
+  flex-wrap: wrap;
+}
+
+@media (max-width: 639px) {
+  .app-theme main [class~="flex"][class~="sm:w-auto"] > * {
+    flex: 1 1 8rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

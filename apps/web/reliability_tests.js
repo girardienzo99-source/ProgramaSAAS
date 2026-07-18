@@ -377,6 +377,7 @@ test('supermercado controla conteos, mermas, transferencias y precios masivos', 
   assert.match(migration, /jsonb_array_length\(p_items\) > 5000/);
   assert.match(inventoryRoute, /supermarket\.inventory\.count/);
   assert.match(inventoryRoute, /supermarket\.inventory\.waste/);
+  assert.ok(inventoryRoute.indexOf('resolveTenantContext(request)') < inventoryRoute.indexOf('readJsonObject(request)'));
   assert.match(transferRoute, /supermarket\.inventory\.transfer/);
   assert.match(pricesRoute, /supermarket\.prices\.bulk/);
   assert.match(workspace, /Control operativo/);

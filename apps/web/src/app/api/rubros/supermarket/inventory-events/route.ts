@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server';
-import { authorizeRequest } from '@/lib/api/authorization';
+import { authorizeRequest, requireBusinessType, requirePermission } from '@/lib/api/authorization';
 import { enumValue, readJsonObject, requiredBoundedString, requiredIdempotencyKey, requiredNumber } from '@/lib/api/core';
 import { apiErrorResponse } from '@/lib/api/responses';
 import { adjustSupermarketInventory, listSupermarketInventoryEvents } from '@/lib/api/supermarketRepository';
+import { resolveTenantContext } from '@/lib/api/tenant';
 
 const OPERATIONS = ['count', 'waste'] as const;
 
@@ -17,10 +18,11 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
+    const context = requireBusinessType(await resolveTenantContext(request), 'supermarket');
     const body = await readJsonObject(request);
     const operation = enumValue(body, 'operation', OPERATIONS);
     const permission = operation === 'count' ? 'supermarket.inventory.count' : 'supermarket.inventory.waste';
-    const tenant = await authorizeRequest(request, permission, 'supermarket');
+    const tenant = requirePermission(context, permission);
     const result = await adjustSupermarketInventory(tenant, {
       idempotencyKey: requiredIdempotencyKey(request),
       productId: requiredBoundedString(body, 'productId', { label: 'El producto', maxLength: 50 }),

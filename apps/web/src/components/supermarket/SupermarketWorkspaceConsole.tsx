@@ -17,7 +17,12 @@ import {
   X,
 } from 'lucide-react';
 import { apiFetch, uploadCatalogImage } from '@/lib/client/apiFetch';
-import SupermarketConsole, { SUPERMARKET_PRODUCTS, type SupermarketProduct } from './SupermarketConsole';
+import SupermarketConsole, {
+  SUPERMARKET_PRODUCTS,
+  type SupermarketCashState,
+  type SupermarketProduct,
+  type SupermarketSaleResult,
+} from './SupermarketConsole';
 
 type Area = 'pos' | 'catalog' | 'inventory' | 'purchases' | 'lots';
 type ProductFilter = 'all' | 'active' | 'paused' | 'low' | 'expiring';
@@ -76,6 +81,10 @@ export default function SupermarketWorkspaceConsole() {
   const [editingPurchase, setEditingPurchase] = useState<Purchase | null>(null);
   const [feedback, setFeedback] = useState('');
   const [syncing, setSyncing] = useState(false);
+  const [cashState, setCashState] = useState<SupermarketCashState>({
+    isOpen: false, cashId: null, openingBalance: 0, expectedCash: 0,
+    salesTotal: 0, cashPayments: 0, qrPayments: 0, ticketCount: 0, openedAt: null,
+  });
 
   useEffect(() => {
     const sync = () => {
@@ -94,12 +103,14 @@ export default function SupermarketWorkspaceConsole() {
       apiFetch<{ items: SupermarketProduct[] }>('/api/rubros/supermarket/catalog'),
       apiFetch<{ items: Purchase[] }>('/api/rubros/supermarket/purchases'),
       apiFetch<{ items: StockLot[] }>('/api/rubros/supermarket/lots'),
+      apiFetch<{ state: SupermarketCashState }>('/api/rubros/supermarket/cash'),
     ])
-      .then(([catalogResponse, purchasesResponse, lotsResponse]) => {
+      .then(([catalogResponse, purchasesResponse, lotsResponse, cashResponse]) => {
         if (!active) return;
         setProducts(catalogResponse.items);
         setPurchases(purchasesResponse.items);
         setLots(lotsResponse.items);
+        setCashState(cashResponse.state);
       })
       .catch((error: unknown) => {
         if (active) setFeedback(error instanceof Error ? error.message : 'No se pudieron sincronizar los datos del supermercado.');
@@ -175,24 +186,57 @@ export default function SupermarketWorkspaceConsole() {
     }
   };
 
-  const commitSale = (items: Array<{ productId: string; quantity: number }>) => {
-    setProducts((current) => current.map((product) => {
-      const sale = items.find((item) => item.productId === product.id);
-      return sale ? { ...product, stock: Math.max(0, Number((product.stock - sale.quantity).toFixed(3))) } : product;
-    }));
-    setLots((current) => {
-      const remaining = new Map(items.map((item) => [item.productId, item.quantity]));
-      return [...current]
-        .sort((a, b) => a.expirationDate.localeCompare(b.expirationDate))
-        .map((lot) => {
-          const pending = remaining.get(lot.productId) ?? 0;
-          if (pending <= 0) return lot;
-          const consumed = Math.min(lot.quantity, pending);
-          remaining.set(lot.productId, pending - consumed);
-          return { ...lot, quantity: Number((lot.quantity - consumed).toFixed(3)) };
-        });
+  const refreshPosState = async () => {
+    const [catalogResponse, lotsResponse, cashResponse] = await Promise.all([
+      apiFetch<{ items: SupermarketProduct[] }>('/api/rubros/supermarket/catalog'),
+      apiFetch<{ items: StockLot[] }>('/api/rubros/supermarket/lots'),
+      apiFetch<{ state: SupermarketCashState }>('/api/rubros/supermarket/cash'),
+    ]);
+    setProducts(catalogResponse.items);
+    setLots(lotsResponse.items);
+    setCashState(cashResponse.state);
+  };
+
+  const commitSale = async (input: {
+    items: Array<{ productId: string; quantity: number }>;
+    paymentMethod: 'cash' | 'qr';
+    idempotencyKey: string;
+  }): Promise<SupermarketSaleResult> => {
+    const response = await apiFetch<{ sale: SupermarketSaleResult }>('/api/rubros/supermarket/sales', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': input.idempotencyKey },
+      body: JSON.stringify({ items: input.items, paymentMethod: input.paymentMethod }),
     });
-    showFeedback('Venta registrada y existencias actualizadas.');
+    await refreshPosState();
+    return response.sale;
+  };
+
+  const openCash = async (openingBalance: number) => {
+    const response = await apiFetch<{ state: SupermarketCashState }>('/api/rubros/supermarket/cash', {
+      method: 'POST', body: JSON.stringify({ openingBalance }),
+    });
+    setCashState(response.state);
+  };
+
+  const closeCash = async (declaredCash: number) => {
+    const response = await apiFetch<{ result: { difference: number } }>('/api/rubros/supermarket/cash', {
+      method: 'PATCH', body: JSON.stringify({ declaredCash }),
+    });
+    await refreshPosState();
+    return response.result;
+  };
+
+  const registerReturn = async (input: {
+    barcode: string; quantity: number; reason: string;
+    disposition: 'restock' | 'waste'; idempotencyKey: string;
+  }) => {
+    const response = await apiFetch<{ item: { productName: string } }>('/api/rubros/supermarket/returns', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': input.idempotencyKey },
+      body: JSON.stringify(input),
+    });
+    await refreshPosState();
+    return response.item;
   };
 
   const savePurchase = async () => {
@@ -277,7 +321,15 @@ export default function SupermarketWorkspaceConsole() {
 
       <div className="overflow-x-auto border-b border-slate-200" role="tablist" aria-label="Gestion de supermercado"><div className="flex min-w-max gap-1">{tabs.map(({ id, label, icon: Icon }) => <button key={id} role="tab" aria-selected={area === id} onClick={() => navigate(id)} className={`flex h-11 items-center gap-2 border-b-2 px-4 text-sm font-semibold ${area === id ? 'border-emerald-600 text-emerald-700' : 'border-transparent text-slate-500 hover:text-slate-900'}`}><Icon className="h-4 w-4" />{label}</button>)}</div></div>
 
-      {area === 'pos' && <SupermarketConsole products={activeProducts} onSaleCommitted={commitSale} />}
+      {area === 'pos' && <SupermarketConsole
+        products={activeProducts}
+        cashState={cashState}
+        onSaleCommitted={commitSale}
+        onCashOpened={openCash}
+        onCashClosed={closeCash}
+        onReturnRegistered={registerReturn}
+        onNavigatePurchases={() => navigate('purchases')}
+      />}
 
       {area === 'catalog' && <Catalog products={visibleProducts} allProducts={products} search={search} setSearch={setSearch} filter={filter} setFilter={setFilter} onEdit={(product) => setEditingProduct({ ...product })} onCreate={() => setEditingProduct({ ...EMPTY_PRODUCT })} onToggle={toggleProduct} />}
 

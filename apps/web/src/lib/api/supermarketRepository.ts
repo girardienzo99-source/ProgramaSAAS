@@ -56,6 +56,51 @@ export interface SupermarketLotRecord {
   receivedDate: string;
 }
 
+export interface SupermarketCashState {
+  isOpen: boolean;
+  cashId: string | null;
+  name: string;
+  openingBalance: number;
+  expectedCash: number;
+  salesTotal: number;
+  cashPayments: number;
+  qrPayments: number;
+  ticketCount: number;
+  openedAt: string | null;
+}
+
+export interface SupermarketSaleInput {
+  idempotencyKey: string;
+  paymentMethod: 'cash' | 'qr';
+  items: Array<{ productId: string; quantity: number }>;
+}
+
+export interface SupermarketSaleResult {
+  saleId: string;
+  total: number;
+  subtotal: number;
+  taxAmount: number;
+  discount: number;
+  fiscalStatus: 'pending' | 'authorized' | 'rejected' | 'not_required';
+  duplicate: boolean;
+}
+
+export interface SupermarketReturnInput {
+  idempotencyKey: string;
+  barcode: string;
+  quantity: number;
+  reason: string;
+  disposition: 'restock' | 'waste';
+}
+
+export interface SupermarketReturnResult {
+  returnId: string;
+  productId: string;
+  productName: string;
+  disposition: 'restock' | 'waste';
+  duplicate: boolean;
+}
+
 interface DatabaseProduct {
   id: string;
   name: string;
@@ -99,6 +144,9 @@ interface LocalSupermarketState {
   products: Map<string, SupermarketProductRecord[]>;
   purchases: Map<string, SupermarketPurchaseRecord[]>;
   lots: Map<string, SupermarketLotRecord[]>;
+  cash: Map<string, SupermarketCashState>;
+  saleResults: Map<string, SupermarketSaleResult>;
+  returnResults: Map<string, SupermarketReturnResult>;
 }
 
 const globalWithSupermarket = globalThis as typeof globalThis & { __programaSassSupermarket?: LocalSupermarketState };
@@ -106,8 +154,14 @@ const localState = globalWithSupermarket.__programaSassSupermarket ?? {
   products: new Map<string, SupermarketProductRecord[]>(),
   purchases: new Map<string, SupermarketPurchaseRecord[]>(),
   lots: new Map<string, SupermarketLotRecord[]>(),
+  cash: new Map<string, SupermarketCashState>(),
+  saleResults: new Map<string, SupermarketSaleResult>(),
+  returnResults: new Map<string, SupermarketReturnResult>(),
 };
 globalWithSupermarket.__programaSassSupermarket = localState;
+localState.cash ??= new Map<string, SupermarketCashState>();
+localState.saleResults ??= new Map<string, SupermarketSaleResult>();
+localState.returnResults ??= new Map<string, SupermarketReturnResult>();
 
 function daysUntil(date: string): number {
   if (!date) return 9999;
@@ -392,4 +446,149 @@ export async function listSupermarketLots(context: SupermarketContext): Promise<
   }
   if (process.env.NODE_ENV === 'production') persistenceUnavailable();
   return localLots(context).map((item) => ({ ...item }));
+}
+
+function emptyCashState(): SupermarketCashState {
+  return {
+    isOpen: false, cashId: null, name: 'Caja Supermercado', openingBalance: 0,
+    expectedCash: 0, salesTotal: 0, cashPayments: 0, qrPayments: 0,
+    ticketCount: 0, openedAt: null,
+  };
+}
+
+function mapCashState(value: unknown): SupermarketCashState {
+  const item = (value ?? {}) as Record<string, unknown>;
+  return {
+    isOpen: item.isOpen === true,
+    cashId: typeof item.cashId === 'string' ? item.cashId : null,
+    name: typeof item.name === 'string' ? item.name : 'Caja Supermercado',
+    openingBalance: Number(item.openingBalance ?? 0),
+    expectedCash: Number(item.expectedCash ?? 0),
+    salesTotal: Number(item.salesTotal ?? 0),
+    cashPayments: Number(item.cashPayments ?? 0),
+    qrPayments: Number(item.qrPayments ?? 0),
+    ticketCount: Number(item.ticketCount ?? 0),
+    openedAt: typeof item.openedAt === 'string' ? item.openedAt : null,
+  };
+}
+
+export async function getSupermarketCashState(context: SupermarketContext): Promise<SupermarketCashState> {
+  if (isServerSupabaseAdminConfigured) {
+    const { data, error } = await createAdminServerClient().rpc('supermarket_get_cash_state', {
+      p_company_id: context.companyId,
+      p_branch_id: branchId(context),
+    });
+    if (error) throw new ApiError(503, 'No se pudo consultar la caja.', 'SUPERMARKET_CASH_UNAVAILABLE');
+    return mapCashState(data);
+  }
+  if (process.env.NODE_ENV === 'production') persistenceUnavailable();
+  return { ...(localState.cash.get(localKey(context)) ?? emptyCashState()) };
+}
+
+export async function openSupermarketCash(context: SupermarketContext, openingBalance: number): Promise<SupermarketCashState> {
+  if (isServerSupabaseAdminConfigured) {
+    const { error } = await createAdminServerClient().rpc('supermarket_open_cash', {
+      p_company_id: context.companyId, p_branch_id: branchId(context),
+      p_user_id: context.userId, p_opening_balance: openingBalance,
+    });
+    if (error?.message.includes('CASH_ALREADY_OPEN')) throw new ApiError(409, 'Ya existe una caja abierta.', 'CASH_ALREADY_OPEN');
+    if (error) throw new ApiError(503, 'No se pudo abrir la caja.', 'SUPERMARKET_CASH_UNAVAILABLE');
+    return getSupermarketCashState(context);
+  }
+  if (process.env.NODE_ENV === 'production') persistenceUnavailable();
+  const state: SupermarketCashState = {
+    ...emptyCashState(), isOpen: true, cashId: `cash-${crypto.randomUUID()}`,
+    openingBalance, expectedCash: openingBalance, openedAt: new Date().toISOString(),
+  };
+  localState.cash.set(localKey(context), state);
+  return { ...state };
+}
+
+export async function closeSupermarketCash(context: SupermarketContext, declaredCash: number) {
+  if (isServerSupabaseAdminConfigured) {
+    const { data, error } = await createAdminServerClient().rpc('supermarket_close_cash', {
+      p_company_id: context.companyId, p_branch_id: branchId(context),
+      p_user_id: context.userId, p_declared_cash: declaredCash,
+    });
+    if (error?.message.includes('CASH_NOT_OPEN')) throw new ApiError(409, 'No hay una caja abierta.', 'CASH_NOT_OPEN');
+    if (error) throw new ApiError(503, 'No se pudo cerrar la caja.', 'SUPERMARKET_CASH_UNAVAILABLE');
+    return data as { cashId: string; expectedCash: number; declaredCash: number; difference: number };
+  }
+  if (process.env.NODE_ENV === 'production') persistenceUnavailable();
+  const state = localState.cash.get(localKey(context));
+  if (!state?.isOpen) throw new ApiError(409, 'No hay una caja abierta.', 'CASH_NOT_OPEN');
+  localState.cash.set(localKey(context), emptyCashState());
+  return { cashId: state.cashId!, expectedCash: state.expectedCash, declaredCash, difference: declaredCash - state.expectedCash };
+}
+
+export async function commitSupermarketSale(context: SupermarketContext, input: SupermarketSaleInput): Promise<SupermarketSaleResult> {
+  if (isServerSupabaseAdminConfigured) {
+    const { data, error } = await createAdminServerClient().rpc('supermarket_commit_sale', {
+      p_company_id: context.companyId, p_branch_id: branchId(context), p_user_id: context.userId,
+      p_idempotency_key: input.idempotencyKey, p_payment_method: input.paymentMethod, p_items: input.items,
+    });
+    if (error?.message.includes('CASH_NOT_OPEN')) throw new ApiError(409, 'Debe abrir la caja antes de cobrar.', 'CASH_NOT_OPEN');
+    if (error?.message.includes('INSUFFICIENT_STOCK')) throw new ApiError(409, 'El stock cambio y ya no alcanza para completar la venta.', 'INSUFFICIENT_STOCK');
+    if (error?.message.includes('PRODUCT_NOT_FOUND')) throw new ApiError(404, 'Uno de los productos ya no esta disponible.', 'PRODUCT_NOT_FOUND');
+    if (error) throw new ApiError(503, 'No se pudo confirmar la venta.', 'SUPERMARKET_SALE_UNAVAILABLE');
+    return data as SupermarketSaleResult;
+  }
+  if (process.env.NODE_ENV === 'production') persistenceUnavailable();
+  const resultKey = `${context.companyId}:${input.idempotencyKey}`;
+  const previous = localState.saleResults.get(resultKey);
+  if (previous) return { ...previous, duplicate: true };
+  const cash = localState.cash.get(localKey(context));
+  if (!cash?.isOpen) throw new ApiError(409, 'Debe abrir la caja antes de cobrar.', 'CASH_NOT_OPEN');
+  const products = localProducts(context);
+  let total = 0;
+  for (const item of input.items) {
+    const product = products.find((candidate) => candidate.id === item.productId && candidate.active);
+    if (!product) throw new ApiError(404, 'Uno de los productos ya no esta disponible.', 'PRODUCT_NOT_FOUND');
+    if (product.stock < item.quantity) throw new ApiError(409, 'El stock ya no alcanza.', 'INSUFFICIENT_STOCK');
+    const list = product.price * item.quantity;
+    total += product.promo === '30off' ? list * 0.7 : product.promo === '2x1' && !product.isWeighed ? Math.ceil(item.quantity / 2) * product.price : list;
+  }
+  localState.products.set(localKey(context), products.map((product) => {
+    const item = input.items.find((candidate) => candidate.productId === product.id);
+    return item ? { ...product, stock: product.stock - item.quantity } : product;
+  }));
+  const roundedTotal = Number(total.toFixed(2));
+  const result: SupermarketSaleResult = {
+    saleId: `sale-${crypto.randomUUID()}`, total: roundedTotal,
+    subtotal: Number((roundedTotal / 1.21).toFixed(2)), taxAmount: Number((roundedTotal - roundedTotal / 1.21).toFixed(2)),
+    discount: 0, fiscalStatus: 'pending', duplicate: false,
+  };
+  localState.saleResults.set(resultKey, result);
+  localState.cash.set(localKey(context), {
+    ...cash, salesTotal: cash.salesTotal + roundedTotal, ticketCount: cash.ticketCount + 1,
+    cashPayments: cash.cashPayments + (input.paymentMethod === 'cash' ? roundedTotal : 0),
+    qrPayments: cash.qrPayments + (input.paymentMethod === 'qr' ? roundedTotal : 0),
+    expectedCash: cash.expectedCash + (input.paymentMethod === 'cash' ? roundedTotal : 0),
+  });
+  return result;
+}
+
+export async function registerSupermarketReturn(context: SupermarketContext, input: SupermarketReturnInput): Promise<SupermarketReturnResult> {
+  if (isServerSupabaseAdminConfigured) {
+    const { data, error } = await createAdminServerClient().rpc('supermarket_register_return', {
+      p_company_id: context.companyId, p_branch_id: branchId(context), p_user_id: context.userId,
+      p_idempotency_key: input.idempotencyKey, p_barcode: input.barcode,
+      p_quantity: input.quantity, p_reason: input.reason, p_disposition: input.disposition,
+    });
+    if (error?.message.includes('CASH_NOT_OPEN')) throw new ApiError(409, 'Debe abrir la caja para registrar la devolucion.', 'CASH_NOT_OPEN');
+    if (error?.message.includes('PRODUCT_NOT_FOUND')) throw new ApiError(404, 'Producto no encontrado.', 'PRODUCT_NOT_FOUND');
+    if (error) throw new ApiError(503, 'No se pudo registrar la devolucion.', 'SUPERMARKET_RETURN_UNAVAILABLE');
+    return data as SupermarketReturnResult;
+  }
+  if (process.env.NODE_ENV === 'production') persistenceUnavailable();
+  const resultKey = `${context.companyId}:${input.idempotencyKey}`;
+  const previous = localState.returnResults.get(resultKey);
+  if (previous) return { ...previous, duplicate: true };
+  const products = localProducts(context);
+  const product = products.find((candidate) => candidate.barcode === input.barcode);
+  if (!product) throw new ApiError(404, 'Producto no encontrado.', 'PRODUCT_NOT_FOUND');
+  if (input.disposition === 'restock') localState.products.set(localKey(context), products.map((candidate) => candidate.id === product.id ? { ...candidate, stock: candidate.stock + input.quantity } : candidate));
+  const result: SupermarketReturnResult = { returnId: `return-${crypto.randomUUID()}`, productId: product.id, productName: product.name, disposition: input.disposition, duplicate: false };
+  localState.returnResults.set(resultKey, result);
+  return result;
 }

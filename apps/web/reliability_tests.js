@@ -320,9 +320,37 @@ test('supermercado integra catalogo, compras, lotes y POS con stock', () => {
   assert.match(registry, /supermarket\/SupermarketWorkspaceConsole/);
   ['#pos', '#catalog', '#inventory', '#purchases', '#lots'].forEach((hash) => assert.match(config, new RegExp(hash)));
   assert.match(workspace, /onSaleCommitted={commitSale}/);
-  assert.match(workspace, /remaining = new Map/);
+  assert.match(workspace, /api\/rubros\/supermarket\/sales/);
+  assert.match(workspace, /Idempotency-Key/);
   assert.match(workspace, /type="file"/);
-  assert.match(pos, /onSaleCommitted\?/);
+  assert.match(pos, /await onSaleCommitted/);
+  assert.match(pos, /COMPROBANTE INTERNO/);
+  assert.doesNotMatch(pos, /Ticket fiscal generado/);
+});
+
+test('POS de supermercado confirma caja, venta FEFO y devoluciones en el servidor', () => {
+  const migration = fs.readFileSync(
+    path.join(__dirname, '../../packages/database/supabase/migrations/20260718000024_supermarket_pos_and_cash.sql'),
+    'utf8',
+  );
+  const salesRoute = fs.readFileSync(path.join(__dirname, 'src/app/api/rubros/supermarket/sales/route.ts'), 'utf8');
+  const cashRoute = fs.readFileSync(path.join(__dirname, 'src/app/api/rubros/supermarket/cash/route.ts'), 'utf8');
+  const returnsRoute = fs.readFileSync(path.join(__dirname, 'src/app/api/rubros/supermarket/returns/route.ts'), 'utf8');
+
+  ['supermarket_sale_requests', 'supermarket_returns'].forEach((table) => {
+    assert.match(migration, new RegExp(`CREATE TABLE IF NOT EXISTS public\\.${table}`));
+  });
+  assert.match(migration, /UNIQUE\(company_id, idempotency_key\)/);
+  assert.match(migration, /pg_advisory_xact_lock/);
+  assert.match(migration, /FOR UPDATE/);
+  assert.match(migration, /ORDER BY expiration_date ASC NULLS LAST/);
+  assert.match(migration, /INSERT INTO public\.sales/);
+  assert.match(migration, /INSERT INTO public\.sale_items/);
+  assert.match(migration, /supermarket_return/);
+  assert.match(salesRoute, /requiredIdempotencyKey/);
+  assert.match(salesRoute, /authorizeRequest\(request, 'supermarket\.sales\.create', 'supermarket'\)/);
+  assert.match(cashRoute, /supermarket\.cash\.manage/);
+  assert.match(returnsRoute, /supermarket\.returns\.create/);
 });
 
 test('supermercado persiste catalogo, compras y lotes con recepcion atomica', () => {

@@ -65,12 +65,42 @@ interface VoidLog {
   value: number;
 }
 
-interface SupermarketConsoleProps {
-  products?: SupermarketProduct[];
-  onSaleCommitted?: (items: Array<{ productId: string; quantity: number }>) => void;
+export interface SupermarketCashState {
+  isOpen: boolean;
+  cashId: string | null;
+  openingBalance: number;
+  expectedCash: number;
+  salesTotal: number;
+  cashPayments: number;
+  qrPayments: number;
+  ticketCount: number;
+  openedAt: string | null;
 }
 
-export default function SupermarketConsole({ products = SUPERMARKET_PRODUCTS, onSaleCommitted }: SupermarketConsoleProps) {
+export interface SupermarketSaleResult {
+  saleId: string;
+  total: number;
+  subtotal: number;
+  taxAmount: number;
+  discount: number;
+  fiscalStatus: string;
+  duplicate: boolean;
+}
+
+interface SupermarketConsoleProps {
+  products?: SupermarketProduct[];
+  cashState?: SupermarketCashState;
+  onSaleCommitted?: (input: { items: Array<{ productId: string; quantity: number }>; paymentMethod: 'cash' | 'qr'; idempotencyKey: string }) => Promise<SupermarketSaleResult>;
+  onCashOpened?: (openingBalance: number) => Promise<void>;
+  onCashClosed?: (declaredCash: number) => Promise<{ difference: number }>;
+  onReturnRegistered?: (input: { barcode: string; quantity: number; reason: string; disposition: 'restock' | 'waste'; idempotencyKey: string }) => Promise<{ productName: string }>;
+  onNavigatePurchases?: () => void;
+}
+
+export default function SupermarketConsole({
+  products = SUPERMARKET_PRODUCTS, cashState, onSaleCommitted, onCashOpened,
+  onCashClosed, onReturnRegistered, onNavigatePurchases,
+}: SupermarketConsoleProps) {
   const [localProducts, setLocalProducts] = useState<SupermarketProduct[]>(products);
   const [searchTerm, setSearchTerm] = useState('');
   const [activeCategory, setActiveCategory] = useState<string>('all');
@@ -82,18 +112,17 @@ export default function SupermarketConsole({ products = SUPERMARKET_PRODUCTS, on
   const [simulatedWeight, setSimulatedWeight] = useState(1.0);
   
   // Caja y Arqueo
-  const [cashDrawerOpen, setCashDrawerOpen] = useState(false);
-  const [cashierName, setCashierName] = useState('Juan Cajero');
-  const [cashBalance, setCashBalance] = useState(45000); // Efectivo en caja inicial
-  const [salesHistory, setSalesHistory] = useState<SaleRecord[]>([
-    { id: 't-381', timestamp: '12:15:30', itemsCount: 3, total: 8500, paymentMethod: 'Efectivo', margin: 3100 },
-    { id: 't-382', timestamp: '12:20:12', itemsCount: 1, total: 3400, paymentMethod: 'QR MercadoPago', margin: 1300 }
-  ]);
+  const cashDrawerOpen = cashState?.isOpen ?? false;
+  const cashBalance = cashState?.expectedCash ?? 0;
+  const cashierName = 'Usuario actual';
+  const [salesHistory, setSalesHistory] = useState<SaleRecord[]>([]);
   const [voidLogs, setVoidLogs] = useState<VoidLog[]>([]);
+  const [processing, setProcessing] = useState(false);
+  const [openingBalance, setOpeningBalance] = useState(0);
 
   // Modal Arqueo de Caja
   const [isArqueoOpen, setIsArqueoOpen] = useState(false);
-  const [countedCash, setCountedCash] = useState(45000);
+  const [countedCash, setCountedCash] = useState(0);
 
   // Modal Ticket Termico
   const [printedTicketText, setPrintedTicketText] = useState<string | null>(null);
@@ -166,65 +195,101 @@ export default function SupermarketConsole({ products = SUPERMARKET_PRODUCTS, on
     setCart(prev => prev.filter(item => item.product.id !== prodId));
   };
 
-  const handleCheckout = (method: PaymentMethod) => {
-    if (cart.length === 0) return;
-    const cartTotal = cart.reduce((acc, curr) => acc + curr.subtotal, 0);
-
-    // Calcular Margen
-    const margin = cart.reduce((acc, curr) => {
-      const costTotal = curr.product.isWeighed 
-        ? (curr.weight || 0) * curr.product.cost 
-        : curr.qty * curr.product.cost;
-      return acc + (curr.subtotal - costTotal);
+  const handleCheckout = async (method: PaymentMethod) => {
+    if (cart.length === 0 || processing || !onSaleCommitted) return;
+    const margin = cart.reduce((sum, item) => {
+      const cost = item.product.isWeighed ? (item.weight || 0) * item.product.cost : item.qty * item.product.cost;
+      return sum + item.subtotal - cost;
     }, 0);
-
-    const newSale: SaleRecord = {
-      id: `t-${383 + salesHistory.length}`,
-      timestamp: new Date().toLocaleTimeString().slice(0, 8),
-      itemsCount: cart.reduce((acc, curr) => acc + curr.qty, 0),
-      total: cartTotal,
-      paymentMethod: method,
-      margin
-    };
-
-    setSalesHistory(prev => [newSale, ...prev]);
-    setCashBalance(prev => prev + (method === 'Efectivo' ? cartTotal : 0));
-
-    // Generar Simulación de Ticket Térmico
-    const ticketItems = cart.map(item => 
-      `${item.product.name.slice(0, 20)} x${item.qty} $${item.subtotal.toLocaleString()}`
-    ).join('\n');
-
-    setPrintedTicketText(
-      `SUPERMERCADO SASS SRL\nCuit: 30-71524310-9\n\nCajero: ${cashierName}\nFecha: ${new Date().toLocaleDateString()}\n\n${ticketItems}\n\nTotal: $${cartTotal.toLocaleString()}\nM.Pago: ${method}\n\n¡Gracias por su compra!`
-    );
-
-    onSaleCommitted?.(cart.map((item) => ({
+    const items = cart.map((item) => ({
       productId: item.product.id,
       quantity: item.product.isWeighed ? (item.weight || 0) : item.qty,
-    })));
-    setCart([]);
-    setFeedback({ type: 'success', message: `Venta cobrada con ${method}. Ticket fiscal generado.` });
+    }));
+    setProcessing(true);
+    try {
+      const result = await onSaleCommitted({
+        items,
+        paymentMethod: method === 'Efectivo' ? 'cash' : 'qr',
+        idempotencyKey: `supermarket-sale:${crypto.randomUUID()}`,
+      });
+      const sale: SaleRecord = {
+        id: result.saleId,
+        timestamp: new Date().toLocaleTimeString().slice(0, 8),
+        itemsCount: items.reduce((sum, item) => sum + item.quantity, 0),
+        total: result.total,
+        paymentMethod: method,
+        margin,
+      };
+      setSalesHistory((current) => current.some((item) => item.id === sale.id) ? current : [sale, ...current]);
+      const ticketItems = cart.map((item) => `${item.product.name.slice(0, 24)} x${item.qty} $${item.subtotal.toLocaleString()}`).join('\n');
+      setPrintedTicketText(`COMPROBANTE INTERNO\nOperación: ${result.saleId.slice(0, 8)}\nCajero: ${cashierName}\nFecha: ${new Date().toLocaleString()}\n\n${ticketItems}\n\nTotal: $${result.total.toLocaleString()}\nMedio: ${method}\n\nEstado fiscal: pendiente de ARCA`);
+      setCart([]);
+      setFeedback({ type: 'success', message: `Venta confirmada con ${method}. Stock y caja actualizados.` });
+    } catch (error) {
+      setFeedback({ type: 'error', message: error instanceof Error ? error.message : 'No se pudo confirmar la venta.' });
+    } finally {
+      setProcessing(false);
+    }
   };
 
-  const handleRegisterReturn = (e: React.FormEvent) => {
-    e.preventDefault();
-    const prod = localProducts.find(p => p.barcode === returnBarcode);
-    if (!prod) {
-      setFeedback({ type: 'error', message: 'Producto no encontrado para devolución.' });
-      return;
+  const handleRegisterReturn = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!onReturnRegistered || processing) return;
+    setProcessing(true);
+    try {
+      const result = await onReturnRegistered({
+        barcode: returnBarcode,
+        quantity: 1,
+        reason: returnReason,
+        disposition: returnReason === 'Cambio de Producto' ? 'restock' : 'waste',
+        idempotencyKey: `supermarket-return:${crypto.randomUUID()}`,
+      });
+      const product = localProducts.find((item) => item.barcode === returnBarcode);
+      setVoidLogs((current) => [{
+        id: `ret-${Date.now()}`,
+        timestamp: new Date().toLocaleTimeString().slice(0, 8),
+        productName: `DEVOLUCIÓN: ${result.productName}`,
+        reason: returnReason,
+        value: -(product?.price ?? 0),
+      }, ...current]);
+      setReturnBarcode('');
+      setFeedback({ type: 'success', message: `Devolución de ${result.productName} auditada.` });
+    } catch (error) {
+      setFeedback({ type: 'error', message: error instanceof Error ? error.message : 'No se pudo registrar la devolución.' });
+    } finally {
+      setProcessing(false);
     }
+  };
 
-    const log: VoidLog = {
-      id: `ret-${Date.now()}`,
-      timestamp: new Date().toLocaleTimeString().slice(0, 8),
-      productName: `DEVOLUCIÓN: ${prod.name}`,
-      reason: returnReason,
-      value: -prod.price
-    };
-    setVoidLogs(prev => [log, ...prev]);
-    setReturnBarcode('');
-    setFeedback({ type: 'success', message: `Devolución de ${prod.name} registrada exitosamente.` });
+  const handleOpenCash = async () => {
+    if (!onCashOpened || processing) return;
+    setProcessing(true);
+    try {
+      await onCashOpened(openingBalance);
+      setCountedCash(openingBalance);
+      setFeedback({ type: 'success', message: 'Caja abierta y lista para operar.' });
+    } catch (error) {
+      setFeedback({ type: 'error', message: error instanceof Error ? error.message : 'No se pudo abrir la caja.' });
+    } finally {
+      setProcessing(false);
+    }
+  };
+
+  const handleCloseCash = async () => {
+    if (!onCashClosed || processing) return;
+    setProcessing(true);
+    try {
+      const result = await onCashClosed(countedCash);
+      setIsArqueoOpen(false);
+      setFeedback({
+        type: Math.abs(result.difference) <= 0.01 ? 'success' : 'error',
+        message: `Caja cerrada. Diferencia de arqueo: $${result.difference.toLocaleString()}.`,
+      });
+    } catch (error) {
+      setFeedback({ type: 'error', message: error instanceof Error ? error.message : 'No se pudo cerrar la caja.' });
+    } finally {
+      setProcessing(false);
+    }
   };
 
   const cartTotal = cart.reduce((acc, curr) => acc + curr.subtotal, 0);
@@ -252,20 +317,30 @@ export default function SupermarketConsole({ products = SUPERMARKET_PRODUCTS, on
 
         <div className="flex flex-wrap gap-2 w-full lg:w-auto">
           <button
-            onClick={() => setIsArqueoOpen(true)}
+            onClick={() => { setCountedCash(cashBalance); setIsArqueoOpen(true); }}
+            disabled={!cashDrawerOpen || processing}
             className="flex-1 lg:flex-none px-4 py-2 bg-slate-950 border border-slate-800 text-slate-300 font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 hover:bg-slate-900"
           >
             <Calculator className="h-4 w-4 text-cyan-400" />
             Arqueo de Caja
           </button>
 
+          {!cashDrawerOpen && <input
+            type="number"
+            min="0"
+            aria-label="Saldo inicial de caja"
+            value={openingBalance}
+            onChange={(event) => setOpeningBalance(Number(event.target.value))}
+            className="w-32 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white"
+          />}
           <button
-            onClick={() => setCashDrawerOpen(!cashDrawerOpen)}
+            onClick={cashDrawerOpen ? () => { setCountedCash(cashBalance); setIsArqueoOpen(true); } : handleOpenCash}
+            disabled={processing}
             className={`flex-1 lg:flex-none px-4 py-2 text-xs font-bold rounded-xl border transition-all ${
               cashDrawerOpen ? 'bg-emerald-500/10 border-emerald-500 text-emerald-400' : 'bg-slate-950 border-slate-800 text-slate-400'
             }`}
           >
-            {cashDrawerOpen ? `✓ Caja Abierta (${cashierName})` : '✗ Caja Cerrada'}
+            {processing ? 'Procesando...' : cashDrawerOpen ? `Caja abierta (${cashierName})` : 'Abrir caja'}
           </button>
         </div>
       </div>
@@ -291,7 +366,7 @@ export default function SupermarketConsole({ products = SUPERMARKET_PRODUCTS, on
         <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-850">
           <span className="text-[10px] text-slate-500 font-bold uppercase block">Ventas del Día</span>
           <span className="text-xl font-black text-white mt-1 block">
-            ${(salesHistory.reduce((acc, curr) => acc + curr.total, 0)).toLocaleString()}
+            ${(cashState?.salesTotal ?? 0).toLocaleString()}
           </span>
         </div>
         <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-850">
@@ -302,7 +377,7 @@ export default function SupermarketConsole({ products = SUPERMARKET_PRODUCTS, on
         </div>
         <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-850">
           <span className="text-[10px] text-slate-500 font-bold uppercase block">Tickets Emitidos</span>
-          <span className="text-xl font-black text-cyan-400 mt-1 block">{salesHistory.length}</span>
+          <span className="text-xl font-black text-cyan-400 mt-1 block">{cashState?.ticketCount ?? 0}</span>
         </div>
         <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-850">
           <span className="text-[10px] text-slate-500 font-bold uppercase block">Stock Crítico</span>
@@ -542,14 +617,14 @@ export default function SupermarketConsole({ products = SUPERMARKET_PRODUCTS, on
             <div className="grid grid-cols-2 gap-2">
               <button
                 onClick={() => handleCheckout('Efectivo')}
-                disabled={cart.length === 0 || !cashDrawerOpen}
+                disabled={cart.length === 0 || !cashDrawerOpen || processing}
                 className="py-2.5 bg-slate-950 hover:bg-slate-900 border border-slate-800 text-slate-350 font-bold rounded-xl text-[10px] uppercase transition-all disabled:opacity-50"
               >
                 Cobrar Efectivo
               </button>
               <button
                 onClick={() => handleCheckout('QR MercadoPago')}
-                disabled={cart.length === 0 || !cashDrawerOpen}
+                disabled={cart.length === 0 || !cashDrawerOpen || processing}
                 className="py-2.5 bg-cyan-600 hover:bg-cyan-500 text-slate-950 font-bold rounded-xl text-[10px] uppercase transition-all disabled:opacity-50"
               >
                 Cobrar QR/Tarjeta
@@ -663,20 +738,10 @@ export default function SupermarketConsole({ products = SUPERMARKET_PRODUCTS, on
                     </span>
                   </div>
                   <button
-                    onClick={() => {
-                      const costTotal = p.cost * 50;
-                      setCashBalance(prev => Math.max(0, prev - costTotal));
-                      setLocalProducts(prev => prev.map(item => {
-                        if (item.id === p.id) {
-                          return { ...item, stock: item.stock + 50 };
-                        }
-                        return item;
-                      }));
-                      setFeedback({ type: 'success', message: `Pedido de reposición enviado a ${p.supplier}. Recibidos +50 unidades.` });
-                    }}
+                    onClick={onNavigatePurchases}
                     className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-550 text-slate-950 font-bold rounded-xl text-[9px] uppercase transition-colors cursor-pointer"
                   >
-                    Reponer (+50)
+                    Generar compra
                   </button>
                 </div>
               ))
@@ -734,13 +799,11 @@ export default function SupermarketConsole({ products = SUPERMARKET_PRODUCTS, on
                 Cerrar
               </button>
               <button
-                onClick={() => {
-                  setFeedback({ type: 'success', message: 'Cierre de caja y arqueo guardados en el reporte central.' });
-                  setIsArqueoOpen(false);
-                }}
+                onClick={handleCloseCash}
+                disabled={processing}
                 className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold rounded-xl text-xs"
               >
-                Confirmar Arqueo
+                {processing ? 'Cerrando...' : 'Confirmar cierre'}
               </button>
             </div>
           </div>
@@ -754,7 +817,7 @@ export default function SupermarketConsole({ products = SUPERMARKET_PRODUCTS, on
             <div className="flex justify-between items-start border-b border-slate-100 pb-3">
               <h4 className="font-extrabold text-sm text-slate-900 flex items-center gap-1.5">
                 <Printer className="h-4.5 w-4.5 text-emerald-600" />
-                SIMULACIÓN TICKET FISCAL
+                COMPROBANTE INTERNO DE VENTA
               </h4>
               <button onClick={() => setPrintedTicketText(null)} className="text-slate-400 hover:text-slate-650">
                 <X className="h-5 w-5" />

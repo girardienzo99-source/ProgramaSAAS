@@ -11,6 +11,7 @@ import {
   Camera,
   ClipboardCheck,
   Gift,
+  History,
   Image as ImageIcon,
   LayoutGrid,
   MapPin,
@@ -35,10 +36,11 @@ import SupermarketConsole, {
 import SupermarketLoyaltyConsole from './SupermarketLoyaltyConsole';
 import SupermarketReportsConsole from './SupermarketReportsConsole';
 import SupermarketSupplyConsole from './SupermarketSupplyConsole';
+import type { SupermarketPurchaseReceiptRecord, SupermarketPurchaseReceiptResult } from '@/lib/api/supermarketRepository';
 
 type Area = 'pos' | 'catalog' | 'inventory' | 'purchases' | 'lots' | 'operations' | 'layout' | 'loyalty' | 'reports' | 'supply';
 type ProductFilter = 'all' | 'active' | 'paused' | 'low' | 'expiring';
-type PurchaseStatus = 'draft' | 'ordered' | 'received';
+type PurchaseStatus = 'draft' | 'ordered' | 'partially_received' | 'received';
 
 interface Purchase {
   id: string;
@@ -50,7 +52,26 @@ interface Purchase {
   status: PurchaseStatus;
   lotCode: string;
   expirationDate: string;
+  receivedQuantity: number;
+  rejectedQuantity: number;
+  remainingQuantity: number;
+  receiptCount: number;
+  shipmentId: string | null;
+  dispatchNumber: string;
 }
+
+interface ReceiptDraft {
+  orderId: string;
+  acceptedQuantity: number;
+  rejectedQuantity: number;
+  lotCode: string;
+  expirationDate: string;
+  receivedOn: string;
+  deliveryNoteNumber: string;
+  notes: string;
+}
+
+type PurchaseDraftInput = Omit<Purchase, 'id' | 'receivedQuantity' | 'rejectedQuantity' | 'remainingQuantity' | 'receiptCount' | 'shipmentId' | 'dispatchNumber'>;
 
 interface StockLot {
   id: string;
@@ -151,8 +172,8 @@ const EMPTY_PRODUCT: SupermarketProduct = {
 };
 
 const INITIAL_PURCHASES: Purchase[] = [
-  { id: 'oc-1042', supplier: 'La Paulina SRL', productId: 's2', quantity: 24, unitCost: 5700, expectedDate: '2026-07-13', status: 'ordered', lotCode: 'QC-260713', expirationDate: '2026-08-02' },
-  { id: 'oc-1043', supplier: 'Central Frutera', productId: 's4', quantity: 40, unitCost: 1550, expectedDate: '2026-07-12', status: 'draft', lotCode: 'MZ-260712', expirationDate: '2026-07-22' },
+  { id: 'oc-1042', supplier: 'La Paulina SRL', productId: 's2', quantity: 24, unitCost: 5700, expectedDate: '2026-07-13', status: 'ordered', lotCode: 'QC-260713', expirationDate: '2026-08-02', receivedQuantity: 0, rejectedQuantity: 0, remainingQuantity: 24, receiptCount: 0, shipmentId: null, dispatchNumber: '' },
+  { id: 'oc-1043', supplier: 'Central Frutera', productId: 's4', quantity: 40, unitCost: 1550, expectedDate: '2026-07-12', status: 'draft', lotCode: 'MZ-260712', expirationDate: '2026-07-22', receivedQuantity: 0, rejectedQuantity: 0, remainingQuantity: 40, receiptCount: 0, shipmentId: null, dispatchNumber: '' },
 ];
 
 const INITIAL_LOTS: StockLot[] = [
@@ -170,6 +191,7 @@ export default function SupermarketWorkspaceConsole() {
   const [products, setProducts] = useState<SupermarketProduct[]>(INITIAL_PRODUCTS);
   const [purchases, setPurchases] = useState<Purchase[]>(INITIAL_PURCHASES);
   const [lots, setLots] = useState<StockLot[]>(INITIAL_LOTS);
+  const [receipts, setReceipts] = useState<SupermarketPurchaseReceiptRecord[]>([]);
   const [branches, setBranches] = useState<Branch[]>([]);
   const [currentBranchId, setCurrentBranchId] = useState<string | null>(null);
   const [inventoryEvents, setInventoryEvents] = useState<InventoryEvent[]>([]);
@@ -181,6 +203,7 @@ export default function SupermarketWorkspaceConsole() {
   const [filter, setFilter] = useState<ProductFilter>('all');
   const [editingProduct, setEditingProduct] = useState<SupermarketProduct | null>(null);
   const [editingPurchase, setEditingPurchase] = useState<Purchase | null>(null);
+  const [receiptDraft, setReceiptDraft] = useState<ReceiptDraft | null>(null);
   const [feedback, setFeedback] = useState('');
   const [syncing, setSyncing] = useState(false);
   const [cashState, setCashState] = useState<SupermarketCashState>({
@@ -212,8 +235,9 @@ export default function SupermarketWorkspaceConsole() {
       apiFetch<{ items: StoreLocation[] }>('/api/rubros/supermarket/locations'),
       apiFetch<{ items: ProductPlacement[] }>('/api/rubros/supermarket/placements'),
       apiFetch<{ items: LabelJob[] }>('/api/rubros/supermarket/labels'),
+      apiFetch<{ items: SupermarketPurchaseReceiptRecord[] }>('/api/rubros/supermarket/purchase-receipts'),
     ])
-      .then(([catalogResponse, purchasesResponse, lotsResponse, cashResponse, branchesResponse, eventsResponse, transfersResponse, locationsResponse, placementsResponse, labelsResponse]) => {
+      .then(([catalogResponse, purchasesResponse, lotsResponse, cashResponse, branchesResponse, eventsResponse, transfersResponse, locationsResponse, placementsResponse, labelsResponse, receiptsResponse]) => {
         if (!active) return;
         setProducts(catalogResponse.items);
         setPurchases(purchasesResponse.items);
@@ -226,6 +250,7 @@ export default function SupermarketWorkspaceConsole() {
         setLocations(locationsResponse.items);
         setPlacements(placementsResponse.items);
         setLabelJobs(labelsResponse.items);
+        setReceipts(receiptsResponse.items);
       })
       .catch((error: unknown) => {
         if (active) setFeedback(error instanceof Error ? error.message : 'No se pudieron sincronizar los datos del supermercado.');
@@ -453,7 +478,7 @@ export default function SupermarketWorkspaceConsole() {
     }
   };
 
-  const createSuggestedPurchase = async (input: Omit<Purchase, 'id'>) => {
+  const createSuggestedPurchase = async (input: PurchaseDraftInput) => {
     const response = await apiFetch<{ item: Purchase }>('/api/rubros/supermarket/purchases', {
       method: 'POST', body: JSON.stringify(input),
     });
@@ -465,23 +490,39 @@ export default function SupermarketWorkspaceConsole() {
     setPurchases(response.items);
   };
 
-  const receivePurchase = async (purchase: Purchase) => {
-    if (purchase.status !== 'ordered') return;
+  const openReceipt = (purchase: Purchase) => {
+    if (purchase.status !== 'ordered' && purchase.status !== 'partially_received') return;
+    setReceiptDraft({
+      orderId: purchase.id, acceptedQuantity: purchase.remainingQuantity, rejectedQuantity: 0,
+      lotCode: purchase.lotCode, expirationDate: purchase.expirationDate,
+      receivedOn: new Date().toISOString().slice(0, 10),
+      deliveryNoteNumber: purchase.dispatchNumber, notes: '',
+    });
+  };
+
+  const receivePurchase = async () => {
+    if (!receiptDraft) return;
     setSyncing(true);
     try {
-      await apiFetch('/api/rubros/supermarket/purchases', {
-        method: 'PATCH',
-        body: JSON.stringify({ orderId: purchase.id }),
+      const response = await apiFetch<{ item: SupermarketPurchaseReceiptResult }>('/api/rubros/supermarket/purchases', {
+        method: 'PATCH', headers: { 'Idempotency-Key': `supermarket-receipt:${crypto.randomUUID()}` },
+        body: JSON.stringify(receiptDraft),
       });
-      const [catalogResponse, purchasesResponse, lotsResponse] = await Promise.all([
+      const [catalogResponse, purchasesResponse, lotsResponse, receiptsResponse] = await Promise.all([
         apiFetch<{ items: SupermarketProduct[] }>('/api/rubros/supermarket/catalog'),
         apiFetch<{ items: Purchase[] }>('/api/rubros/supermarket/purchases'),
         apiFetch<{ items: StockLot[] }>('/api/rubros/supermarket/lots'),
+        apiFetch<{ items: SupermarketPurchaseReceiptRecord[] }>('/api/rubros/supermarket/purchase-receipts'),
       ]);
       setProducts(catalogResponse.items);
       setPurchases(purchasesResponse.items);
       setLots(lotsResponse.items);
-      showFeedback('Mercaderia recibida: stock, costo y lote actualizados.');
+      setReceipts(receiptsResponse.items);
+      setReceiptDraft(null);
+      const result = response.item;
+      showFeedback(result.orderStatus === 'received'
+        ? `Recepcion #${result.receiptNumber}: orden completada.`
+        : `Recepcion #${result.receiptNumber}: quedan ${result.remainingQuantity} unidades.`);
     } catch (error) {
       showFeedback(error instanceof Error ? error.message : 'No se pudo recibir la compra.');
     } finally {
@@ -553,8 +594,22 @@ export default function SupermarketWorkspaceConsole() {
 
       {area === 'purchases' && (
         <section className="space-y-4" aria-label="Ordenes de compra">
-          <SectionHeader title="Compras a proveedores" detail="Borradores, autorizacion y recepcion controlada al inventario." action={<button onClick={() => setEditingPurchase({ id: '', supplier: '', productId: products[0]?.id ?? '', quantity: 1, unitCost: products[0]?.cost ?? 0, expectedDate: '', status: 'draft', lotCode: '', expirationDate: '' })} className="flex h-9 items-center gap-2 rounded-md bg-emerald-600 px-4 text-sm font-bold text-white"><Plus className="h-4 w-4" />Nueva compra</button>} />
-          <div className="grid gap-3 lg:grid-cols-2">{purchases.map((purchase) => { const product = products.find((item) => item.id === purchase.productId); return <article key={purchase.id} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm"><div className="flex items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase text-slate-400">{purchase.id}</p><h3 className="font-bold text-slate-900">{product?.name}</h3><p className="text-sm text-slate-500">{purchase.supplier}</p></div><Status value={purchase.status} /></div><div className="mt-4 grid grid-cols-3 gap-3"><Value label="Cantidad" value={String(purchase.quantity)} /><Value label="Costo unit." value={money(purchase.unitCost)} /><Value label="Total" value={money(purchase.quantity * purchase.unitCost)} /></div><div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3"><p className="text-xs text-slate-500">Entrega: {purchase.expectedDate || 'Sin fecha'}</p><div className="flex gap-2">{purchase.status === 'draft' && <button onClick={() => setEditingPurchase({ ...purchase })} aria-label={`Editar ${purchase.id}`} className="rounded-md border border-slate-200 p-2 text-slate-600"><Pencil className="h-4 w-4" /></button>}{purchase.status === 'ordered' && <button onClick={() => receivePurchase(purchase)} className="flex items-center gap-2 rounded-md bg-emerald-600 px-3 py-2 text-xs font-bold text-white"><PackageCheck className="h-4 w-4" />Recibir</button>}</div></div></article>; })}</div>
+          <SectionHeader title="Compras a proveedores" detail="Recepciones parciales, diferencias contra ASN y trazabilidad de lotes." action={<button onClick={() => setEditingPurchase({ id: '', supplier: '', productId: products[0]?.id ?? '', quantity: 1, unitCost: products[0]?.cost ?? 0, expectedDate: '', status: 'draft', lotCode: '', expirationDate: '', receivedQuantity: 0, rejectedQuantity: 0, remainingQuantity: 1, receiptCount: 0, shipmentId: null, dispatchNumber: '' })} className="flex h-9 items-center gap-2 rounded-md bg-emerald-600 px-4 text-sm font-bold text-white"><Plus className="h-4 w-4" />Nueva compra</button>} />
+          <div className="grid gap-3 lg:grid-cols-2">{purchases.map((purchase) => {
+            const product = products.find((item) => item.id === purchase.productId);
+            const progress = purchase.quantity > 0 ? Math.min(100, (purchase.receivedQuantity / purchase.quantity) * 100) : 0;
+            return <article key={purchase.id} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="flex items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase text-slate-400">{purchase.id}</p><h3 className="font-bold text-slate-900">{product?.name}</h3><p className="text-sm text-slate-500">{purchase.supplier}</p></div><Status value={purchase.status} /></div>
+              <div className="mt-4 grid grid-cols-3 gap-3"><Value label="Ordenado" value={String(purchase.quantity)} /><Value label="Recibido" value={String(purchase.receivedQuantity)} /><Value label="Pendiente" value={String(purchase.remainingQuantity)} /></div>
+              <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100" aria-label={`${progress.toFixed(0)}% recibido`}><div className="h-full bg-emerald-500" style={{ width: `${progress}%` }} /></div>
+              <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500"><span>Entrega: {purchase.expectedDate || 'Sin fecha'}</span><span>{purchase.receiptCount} recepciones</span>{purchase.rejectedQuantity > 0 && <span className="font-bold text-rose-700">{purchase.rejectedQuantity} rechazadas</span>}{purchase.dispatchNumber && <span className="font-bold text-blue-700">ASN {purchase.dispatchNumber}</span>}</div>
+              <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3"><p className="text-xs font-semibold text-slate-600">Total orden: {money(purchase.quantity * purchase.unitCost)}</p><div className="flex gap-2">{purchase.status === 'draft' && <button onClick={() => setEditingPurchase({ ...purchase })} aria-label={`Editar ${purchase.id}`} className="rounded-md border border-slate-200 p-2 text-slate-600"><Pencil className="h-4 w-4" /></button>}{(purchase.status === 'ordered' || purchase.status === 'partially_received') && <button onClick={() => openReceipt(purchase)} className="flex items-center gap-2 rounded-md bg-emerald-600 px-3 py-2 text-xs font-bold text-white"><PackageCheck className="h-4 w-4" />{purchase.status === 'partially_received' ? 'Continuar recepcion' : 'Recibir'}</button>}</div></div>
+            </article>;
+          })}</div>
+          <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+            <div className="flex items-center gap-2 border-b border-slate-200 px-4 py-3"><History className="h-4 w-4 text-emerald-700" /><h3 className="font-bold text-slate-900">Historial de recepciones</h3></div>
+            <div className="overflow-x-auto"><table className="w-full min-w-[920px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="px-4 py-3">Recepcion</th><th className="px-4 py-3">Producto</th><th className="px-4 py-3">Aceptado</th><th className="px-4 py-3">Rechazado</th><th className="px-4 py-3">Pendiente</th><th className="px-4 py-3">Remito</th><th className="px-4 py-3">Conciliacion</th><th className="px-4 py-3">Fecha</th></tr></thead><tbody className="divide-y divide-slate-100">{receipts.map((receipt) => <tr key={receipt.id}><td className="px-4 py-3 font-mono font-bold">#{receipt.receiptNumber}</td><td className="px-4 py-3"><p className="font-bold text-slate-900">{receipt.productName}</p><p className="text-xs text-slate-500">OC {receipt.orderNumber}</p></td><td className="px-4 py-3 font-bold text-emerald-700">{receipt.acceptedQuantity}</td><td className="px-4 py-3 font-bold text-rose-700">{receipt.rejectedQuantity || '-'}</td><td className="px-4 py-3 font-semibold">{receipt.remainingQuantity}</td><td className="px-4 py-3">{receipt.deliveryNoteNumber || '-'}</td><td className="px-4 py-3"><ReceiptReconciliation value={receipt.reconciliationStatus} /></td><td className="px-4 py-3 text-slate-600">{receipt.receivedOn}</td></tr>)}{receipts.length === 0 && <tr><td colSpan={8} className="px-4 py-8 text-center text-slate-500">Todavia no hay recepciones registradas.</td></tr>}</tbody></table></div>
+          </div>
         </section>
       )}
 
@@ -597,6 +652,7 @@ export default function SupermarketWorkspaceConsole() {
 
       {editingProduct && <ProductEditor product={editingProduct} setProduct={setEditingProduct} onImage={uploadImage} onSave={saveProduct} onClose={() => setEditingProduct(null)} />}
       {editingPurchase && <PurchaseEditor purchase={editingPurchase} setPurchase={setEditingPurchase} products={products} onSave={savePurchase} onClose={() => setEditingPurchase(null)} />}
+      {receiptDraft && <ReceiptModal draft={receiptDraft} setDraft={setReceiptDraft} purchase={purchases.find((item) => item.id === receiptDraft.orderId)!} product={products.find((item) => item.id === purchases.find((purchase) => purchase.id === receiptDraft.orderId)?.productId)} loading={syncing} onSave={receivePurchase} onClose={() => setReceiptDraft(null)} />}
     </div>
   );
 }
@@ -880,10 +936,28 @@ function PurchaseEditor({ purchase, setPurchase, products, onSave, onClose }: { 
   return <Modal title={purchase.id ? 'Editar orden de compra' : 'Nueva orden de compra'} onClose={onClose} footer={<><button onClick={onClose} className="h-9 rounded-md border border-slate-300 px-4 text-sm font-bold">Cancelar</button><button onClick={onSave} disabled={!purchase.supplier.trim() || purchase.quantity <= 0} className="h-9 rounded-md bg-emerald-600 px-4 text-sm font-bold text-white disabled:opacity-40">Guardar orden</button></>}><div className="grid gap-4 sm:grid-cols-2"><label className="sm:col-span-2"><FieldLabel text="Producto" /><select value={purchase.productId} onChange={(event) => { const product = products.find((item) => item.id === event.target.value); setPurchase({ ...purchase, productId: event.target.value, supplier: product?.supplier ?? purchase.supplier, unitCost: product?.cost ?? purchase.unitCost }); }} className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm">{products.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}</select></label><TextField label="Proveedor" value={purchase.supplier} onChange={(value) => setPurchase({ ...purchase, supplier: value })} /><TextField label="Fecha esperada" value={purchase.expectedDate} onChange={(value) => setPurchase({ ...purchase, expectedDate: value })} /><NumberField label="Cantidad" value={purchase.quantity} onChange={(value) => setPurchase({ ...purchase, quantity: Math.max(0, Number(value)) })} /><NumberField label="Costo unitario" value={purchase.unitCost} onChange={(value) => setPurchase({ ...purchase, unitCost: Math.max(0, Number(value)) })} /><TextField label="Codigo de lote" value={purchase.lotCode} onChange={(value) => setPurchase({ ...purchase, lotCode: value })} /><TextField label="Vencimiento del lote" value={purchase.expirationDate} onChange={(value) => setPurchase({ ...purchase, expirationDate: value })} /></div></Modal>;
 }
 
+function ReceiptModal({ draft, setDraft, purchase, product, loading, onSave, onClose }: { draft: ReceiptDraft; setDraft: (value: ReceiptDraft | null) => void; purchase: Purchase; product?: SupermarketProduct; loading: boolean; onSave: () => void; onClose: () => void }) {
+  const receivedNow = draft.acceptedQuantity + draft.rejectedQuantity;
+  const valid = receivedNow > 0 && receivedNow <= purchase.remainingQuantity && draft.acceptedQuantity >= 0 && draft.rejectedQuantity >= 0 && Boolean(draft.receivedOn);
+  const remitoMismatch = Boolean(purchase.dispatchNumber && draft.deliveryNoteNumber.trim() && purchase.dispatchNumber !== draft.deliveryNoteNumber.trim());
+  const setNumber = (key: 'acceptedQuantity' | 'rejectedQuantity', value: string) => setDraft({ ...draft, [key]: Math.max(0, Number(value)) });
+  return <Modal title="Registrar recepcion parcial" onClose={onClose} footer={<><button onClick={onClose} className="h-9 rounded-md border border-slate-300 px-4 text-sm font-bold">Cancelar</button><button onClick={onSave} disabled={loading || !valid} className="h-9 rounded-md bg-emerald-600 px-4 text-sm font-bold text-white disabled:opacity-40">Confirmar recepcion</button></>}>
+    <div className="space-y-4">
+      <div className="rounded-md border border-slate-200 bg-slate-50 p-4"><p className="font-bold text-slate-900">{product?.name ?? 'Producto'}</p><p className="text-sm text-slate-500">{purchase.supplier} · OC {purchase.id}</p><div className="mt-3 grid grid-cols-3 gap-3"><Value label="Ordenado" value={String(purchase.quantity)} /><Value label="Ya recibido" value={String(purchase.receivedQuantity)} /><Value label="Saldo" value={String(purchase.remainingQuantity)} /></div></div>
+      <div className="grid gap-4 sm:grid-cols-2"><NumberField label="Cantidad aceptada" value={draft.acceptedQuantity} onChange={(value) => setNumber('acceptedQuantity', value)} /><NumberField label="Cantidad rechazada" value={draft.rejectedQuantity} onChange={(value) => setNumber('rejectedQuantity', value)} /><TextField label="Fecha de recepcion" value={draft.receivedOn} onChange={(value) => setDraft({ ...draft, receivedOn: value })} /><TextField label="Numero de remito" value={draft.deliveryNoteNumber} onChange={(value) => setDraft({ ...draft, deliveryNoteNumber: value })} /><TextField label="Codigo de lote" value={draft.lotCode} onChange={(value) => setDraft({ ...draft, lotCode: value })} /><TextField label="Vencimiento del lote" value={draft.expirationDate} onChange={(value) => setDraft({ ...draft, expirationDate: value })} /></div>
+      {purchase.dispatchNumber && <div className={`rounded-md border px-3 py-2 text-sm ${remitoMismatch ? 'border-amber-300 bg-amber-50 text-amber-800' : 'border-blue-200 bg-blue-50 text-blue-800'}`}>ASN informado: <strong>{purchase.dispatchNumber}</strong>{remitoMismatch ? '. El remito recibido no coincide y quedara marcado para revision.' : '. El documento sera conciliado automaticamente.'}</div>}
+      {receivedNow > purchase.remainingQuantity && <p role="alert" className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700">La suma aceptada y rechazada supera el saldo pendiente.</p>}
+      <label><FieldLabel text="Observaciones de calidad o diferencias" /><textarea rows={3} value={draft.notes} onChange={(event) => setDraft({ ...draft, notes: event.target.value })} className="w-full rounded-md border border-slate-300 p-3 text-sm outline-none focus:border-emerald-500" /></label>
+      <p className="text-xs text-slate-500">Solo la cantidad aceptada incrementara stock y lote. Las unidades rechazadas quedan registradas para conciliacion.</p>
+    </div>
+  </Modal>;
+}
+
 function Modal({ title, onClose, footer, children }: { title: string; onClose: () => void; footer: ReactNode; children: ReactNode }) { return <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/50 sm:items-center sm:p-4" role="dialog" aria-modal="true" aria-label={title}><div className="max-h-[94vh] w-full max-w-2xl overflow-y-auto rounded-t-lg bg-white shadow-xl sm:rounded-lg"><div className="flex items-center justify-between border-b border-slate-200 px-5 py-4"><h2 className="font-bold text-slate-900">{title}</h2><button onClick={onClose} aria-label="Cerrar" className="p-2 text-slate-500"><X className="h-5 w-5" /></button></div><div className="p-5">{children}</div><div className="flex justify-end gap-2 border-t border-slate-200 px-5 py-4">{footer}</div></div></div>; }
 function Metric({ label, value, detail, warning = false }: { label: string; value: string; detail: string; warning?: boolean }) { return <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm"><p className="text-xs font-semibold text-slate-500">{label}</p><p className={`mt-1 text-2xl font-bold ${warning ? 'text-amber-700' : 'text-slate-900'}`}>{value}</p><p className="mt-1 text-xs text-slate-500">{detail}</p></div>; }
 function Value({ label, value }: { label: string; value: string }) { return <div><p className="text-[10px] font-bold uppercase text-slate-400">{label}</p><p className="mt-0.5 font-bold text-slate-900">{value}</p></div>; }
-function Status({ value }: { value: PurchaseStatus }) { const style = value === 'received' ? 'bg-emerald-100 text-emerald-700' : value === 'ordered' ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-600'; return <span className={`rounded-full px-2 py-1 text-xs font-bold ${style}`}>{value === 'received' ? 'Recibida' : value === 'ordered' ? 'Pedida' : 'Borrador'}</span>; }
+function Status({ value }: { value: PurchaseStatus }) { const style = value === 'received' ? 'bg-emerald-100 text-emerald-700' : value === 'partially_received' ? 'bg-amber-100 text-amber-800' : value === 'ordered' ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-600'; return <span className={`rounded-full px-2 py-1 text-xs font-bold ${style}`}>{value === 'received' ? 'Recibida' : value === 'partially_received' ? 'Parcial' : value === 'ordered' ? 'Pedida' : 'Borrador'}</span>; }
+function ReceiptReconciliation({ value }: { value: SupermarketPurchaseReceiptRecord['reconciliationStatus'] }) { const labels = { matched: 'Coincide', partial: 'Parcial', rejected_items: 'Con rechazo', document_mismatch: 'Remito distinto', without_asn: 'Sin ASN' }; const style = value === 'matched' ? 'bg-emerald-100 text-emerald-700' : value === 'without_asn' ? 'bg-slate-100 text-slate-600' : 'bg-amber-100 text-amber-800'; return <span className={`rounded-full px-2 py-1 text-xs font-bold ${style}`}>{labels[value]}</span>; }
 function SectionHeader({ title, detail, action }: { title: string; detail: string; action?: React.ReactNode }) { return <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center"><div><h2 className="font-bold text-slate-900">{title}</h2><p className="text-sm text-slate-500">{detail}</p></div>{action}</div>; }
 function FieldLabel({ text }: { text: string }) { return <span className="mb-1.5 block text-xs font-bold text-slate-600">{text}</span>; }
 function TextField({ label, value, onChange, wide = false }: { label: string; value: string; onChange: (value: string) => void; wide?: boolean }) { return <label className={wide ? 'sm:col-span-2' : ''}><FieldLabel text={label} /><input value={value} onChange={(event) => onChange(event.target.value)} className="h-9 w-full rounded-md border border-slate-300 px-3 text-sm outline-none focus:border-emerald-500" /></label>; }

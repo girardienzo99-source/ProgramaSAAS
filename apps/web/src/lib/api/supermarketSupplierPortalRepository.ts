@@ -52,7 +52,9 @@ export interface SupplierPortalOrder {
   unitCost: number;
   total: number;
   expectedDate: string;
-  status: 'ordered' | 'received';
+  status: 'ordered' | 'partially_received' | 'received';
+  receivedQuantity: number;
+  remainingQuantity: number;
   deliveryStatus: SupplierDeliveryStatus | null;
   promisedDate: string;
   notes: string;
@@ -158,6 +160,7 @@ function mapSnapshot(value: unknown): SupplierPortalSnapshot {
       productName: String(order.productName), quantity: Number(order.quantity), unitCost: Number(order.unitCost),
       total: Number(order.total), expectedDate: order.expectedDate ? String(order.expectedDate) : '',
       status: order.status as SupplierPortalOrder['status'],
+      receivedQuantity: Number(order.receivedQuantity ?? 0), remainingQuantity: Number(order.remainingQuantity ?? order.quantity ?? 0),
       deliveryStatus: order.deliveryStatus ? order.deliveryStatus as SupplierDeliveryStatus : null,
       promisedDate: order.promisedDate ? String(order.promisedDate) : '', notes: String(order.notes ?? ''),
       confirmedAt: order.confirmedAt ? String(order.confirmedAt) : null,
@@ -305,13 +308,14 @@ export async function getSupplierPortalSnapshot(token: string): Promise<Supplier
   if (!supplier) throw new ApiError(401, 'El proveedor ya no esta activo.', 'UNAUTHORIZED');
   const products = await listSupermarketProducts(context);
   const orders = (await listSupermarketPurchases(context)).filter((order) =>
-    (order.status === 'ordered' || order.status === 'received') && order.supplier.toLowerCase() === supplier.name.toLowerCase(),
+    (order.status === 'ordered' || order.status === 'partially_received' || order.status === 'received') && order.supplier.toLowerCase() === supplier.name.toLowerCase(),
   ).map((order) => {
     const confirmation = localState.confirmations.get(`${access.companyId}:${order.id}`);
     return {
       id: order.id, orderNumber: null, productName: products.find((item) => item.id === order.productId)?.name ?? 'Producto',
       quantity: order.quantity, unitCost: order.unitCost, total: order.quantity * order.unitCost,
       expectedDate: order.expectedDate, status: order.status as SupplierPortalOrder['status'],
+      receivedQuantity: order.receivedQuantity, remainingQuantity: order.remainingQuantity,
       deliveryStatus: confirmation?.status ?? null, promisedDate: confirmation?.promisedDate ?? '',
       notes: confirmation?.notes ?? '', confirmedAt: confirmation?.confirmedAt ?? null,
       shipment: localState.shipments.get(`${access.companyId}:${order.id}`) ?? null,

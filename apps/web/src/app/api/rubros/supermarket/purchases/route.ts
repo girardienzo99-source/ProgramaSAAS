@@ -6,6 +6,7 @@ import {
   optionalString,
   readJsonObject,
   requiredBoundedString,
+  requiredIdempotencyKey,
   requiredNumber,
   requiredString,
 } from '@/lib/api/core';
@@ -61,8 +62,22 @@ export async function PATCH(request: Request) {
   try {
     const tenant = await authorizeRequest(request, 'supermarket.purchases.receive', 'supermarket');
     const body = await readJsonObject(request);
-    await receiveSupermarketPurchase(tenant, requiredString(body, 'orderId', 'La orden'));
-    return NextResponse.json({ success: true, message: 'Mercaderia recibida y lote registrado.' });
+    const item = await receiveSupermarketPurchase(tenant, {
+      orderId: requiredString(body, 'orderId', 'La orden'), idempotencyKey: requiredIdempotencyKey(request),
+      acceptedQuantity: requiredNumber(body, 'acceptedQuantity', { min: 0, label: 'La cantidad aceptada' }),
+      rejectedQuantity: requiredNumber(body, 'rejectedQuantity', { min: 0, label: 'La cantidad rechazada' }),
+      lotCode: optionalString(body, 'lotCode')?.slice(0, 100) ?? '',
+      expirationDate: optionalDate(body, 'expirationDate'),
+      receivedOn: optionalDate(body, 'receivedOn') || new Date().toISOString().slice(0, 10),
+      deliveryNoteNumber: optionalString(body, 'deliveryNoteNumber')?.slice(0, 80) ?? '',
+      notes: optionalString(body, 'notes')?.slice(0, 1000) ?? '',
+    });
+    return NextResponse.json({
+      success: true,
+      message: item.duplicate ? 'La recepcion ya estaba registrada.'
+        : item.orderStatus === 'received' ? 'Orden recibida completamente.' : 'Recepcion parcial registrada.',
+      item,
+    }, { status: item.duplicate ? 200 : 201 });
   } catch (error) {
     return apiErrorResponse(error, 'No se pudo recibir la compra del supermercado.');
   }

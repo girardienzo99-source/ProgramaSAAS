@@ -4,7 +4,7 @@ import { createAdminServerClient, isServerSupabaseAdminConfigured } from '@/lib/
 export type SupermarketCategory = 'almacen' | 'bebidas' | 'lacteos' | 'carniceria' | 'verduleria' | 'limpieza' | 'panaderia';
 export type SupermarketPromo = 'none' | '2x1' | '30off';
 export type SupermarketUnit = 'kg' | 'unit';
-export type SupermarketPurchaseStatus = 'draft' | 'ordered' | 'received';
+export type SupermarketPurchaseStatus = 'draft' | 'ordered' | 'partially_received' | 'received';
 
 export interface SupermarketContext {
   companyId: string;
@@ -43,9 +43,64 @@ export interface SupermarketPurchaseRecord {
   status: SupermarketPurchaseStatus;
   lotCode: string;
   expirationDate: string;
+  receivedQuantity: number;
+  rejectedQuantity: number;
+  remainingQuantity: number;
+  receiptCount: number;
+  shipmentId: string | null;
+  dispatchNumber: string;
 }
 
-export type SupermarketPurchaseInput = Omit<SupermarketPurchaseRecord, 'id'> & { id?: string };
+export type SupermarketPurchaseInput = Omit<SupermarketPurchaseRecord, 'id' | 'receivedQuantity' | 'rejectedQuantity' | 'remainingQuantity' | 'receiptCount' | 'shipmentId' | 'dispatchNumber'> & { id?: string };
+
+export type SupermarketReceiptReconciliation = 'matched' | 'partial' | 'rejected_items' | 'document_mismatch' | 'without_asn';
+
+export interface SupermarketPurchaseReceiptRecord {
+  id: string;
+  receiptNumber: number;
+  orderId: string;
+  orderNumber: number;
+  supplierName: string;
+  productId: string;
+  productName: string;
+  shipmentId: string | null;
+  deliveryNoteNumber: string;
+  receivedOn: string;
+  orderedQuantity: number;
+  previouslyReceived: number;
+  acceptedQuantity: number;
+  rejectedQuantity: number;
+  remainingQuantity: number;
+  lotCode: string;
+  expirationDate: string;
+  reconciliationStatus: SupermarketReceiptReconciliation;
+  orderStatus: 'partially_received' | 'received';
+  notes: string;
+  createdAt: string;
+}
+
+export interface SupermarketPurchaseReceiptInput {
+  orderId: string;
+  idempotencyKey: string;
+  acceptedQuantity: number;
+  rejectedQuantity: number;
+  lotCode: string;
+  expirationDate: string;
+  receivedOn: string;
+  deliveryNoteNumber: string;
+  notes: string;
+}
+
+export interface SupermarketPurchaseReceiptResult {
+  receiptId: string;
+  receiptNumber: number;
+  orderStatus: 'partially_received' | 'received';
+  acceptedQuantity: number;
+  rejectedQuantity: number;
+  remainingQuantity: number;
+  reconciliationStatus: SupermarketReceiptReconciliation;
+  duplicate: boolean;
+}
 
 export interface SupermarketLotRecord {
   id: string;
@@ -281,6 +336,36 @@ interface DatabasePurchase {
   status: SupermarketPurchaseStatus;
   lot_code: string;
   expiration_date: string | null;
+  received_quantity: number | string;
+  rejected_quantity: number | string;
+  remaining_quantity: number | string;
+  receipt_count: number | string;
+  shipment_id: string | null;
+  dispatch_number: string;
+}
+
+interface DatabasePurchaseReceipt {
+  id: string;
+  receipt_number: number | string;
+  order_id: string;
+  order_number: number | string;
+  supplier_name: string;
+  product_id: string;
+  product_name: string;
+  shipment_id: string | null;
+  delivery_note_number: string;
+  received_on: string;
+  ordered_quantity: number | string;
+  previously_received: number | string;
+  accepted_quantity: number | string;
+  rejected_quantity: number | string;
+  remaining_quantity: number | string;
+  lot_code: string;
+  expiration_date: string | null;
+  reconciliation_status: SupermarketReceiptReconciliation;
+  order_status: 'partially_received' | 'received';
+  notes: string;
+  created_at: string;
 }
 
 interface DatabaseLot {
@@ -326,6 +411,8 @@ interface LocalSupermarketState {
   placements: Map<string, SupermarketPlacementRecord[]>;
   labelJobs: Map<string, SupermarketLabelJobRecord[]>;
   labelJobResults: Map<string, { labelJobId: string; itemCount: number; duplicate: boolean }>;
+  purchaseReceipts: Map<string, SupermarketPurchaseReceiptRecord[]>;
+  purchaseReceiptResults: Map<string, SupermarketPurchaseReceiptResult>;
 }
 
 const globalWithSupermarket = globalThis as typeof globalThis & { __programaSassSupermarket?: LocalSupermarketState };
@@ -344,6 +431,8 @@ const localState = globalWithSupermarket.__programaSassSupermarket ?? {
   placements: new Map<string, SupermarketPlacementRecord[]>(),
   labelJobs: new Map<string, SupermarketLabelJobRecord[]>(),
   labelJobResults: new Map<string, { labelJobId: string; itemCount: number; duplicate: boolean }>(),
+  purchaseReceipts: new Map<string, SupermarketPurchaseReceiptRecord[]>(),
+  purchaseReceiptResults: new Map<string, SupermarketPurchaseReceiptResult>(),
 };
 globalWithSupermarket.__programaSassSupermarket = localState;
 localState.cash ??= new Map<string, SupermarketCashState>();
@@ -357,6 +446,8 @@ localState.locations ??= new Map<string, SupermarketLocationRecord[]>();
 localState.placements ??= new Map<string, SupermarketPlacementRecord[]>();
 localState.labelJobs ??= new Map<string, SupermarketLabelJobRecord[]>();
 localState.labelJobResults ??= new Map<string, { labelJobId: string; itemCount: number; duplicate: boolean }>();
+localState.purchaseReceipts ??= new Map<string, SupermarketPurchaseReceiptRecord[]>();
+localState.purchaseReceiptResults ??= new Map<string, SupermarketPurchaseReceiptResult>();
 
 function daysUntil(date: string): number {
   if (!date) return 9999;
@@ -480,6 +571,23 @@ function mapPurchase(item: DatabasePurchase): SupermarketPurchaseRecord {
     status: item.status,
     lotCode: item.lot_code,
     expirationDate: item.expiration_date ?? '',
+    receivedQuantity: Number(item.received_quantity ?? 0), rejectedQuantity: Number(item.rejected_quantity ?? 0),
+    remainingQuantity: Number(item.remaining_quantity ?? item.quantity), receiptCount: Number(item.receipt_count ?? 0),
+    shipmentId: item.shipment_id ?? null, dispatchNumber: item.dispatch_number ?? '',
+  };
+}
+
+function mapPurchaseReceipt(item: DatabasePurchaseReceipt): SupermarketPurchaseReceiptRecord {
+  return {
+    id: item.id, receiptNumber: Number(item.receipt_number), orderId: item.order_id,
+    orderNumber: Number(item.order_number), supplierName: item.supplier_name, productId: item.product_id,
+    productName: item.product_name, shipmentId: item.shipment_id, deliveryNoteNumber: item.delivery_note_number ?? '',
+    receivedOn: item.received_on, orderedQuantity: Number(item.ordered_quantity),
+    previouslyReceived: Number(item.previously_received), acceptedQuantity: Number(item.accepted_quantity),
+    rejectedQuantity: Number(item.rejected_quantity), remainingQuantity: Number(item.remaining_quantity),
+    lotCode: item.lot_code ?? '', expirationDate: item.expiration_date ?? '',
+    reconciliationStatus: item.reconciliation_status, orderStatus: item.order_status,
+    notes: item.notes ?? '', createdAt: item.created_at,
   };
 }
 
@@ -616,58 +724,119 @@ export async function saveSupermarketPurchase(
   const current = localPurchases(context);
   const previous = input.id ? current.find((item) => item.id === input.id) : undefined;
   if (input.id && !previous) throw new ApiError(404, 'La compra no existe.', 'PURCHASE_NOT_FOUND');
-  const saved: SupermarketPurchaseRecord = { ...input, id: previous?.id ?? `po-${crypto.randomUUID()}` };
+  const saved: SupermarketPurchaseRecord = {
+    ...input, id: previous?.id ?? `po-${crypto.randomUUID()}`,
+    receivedQuantity: previous?.receivedQuantity ?? 0, rejectedQuantity: previous?.rejectedQuantity ?? 0,
+    remainingQuantity: previous?.remainingQuantity ?? input.quantity, receiptCount: previous?.receiptCount ?? 0,
+    shipmentId: previous?.shipmentId ?? null, dispatchNumber: previous?.dispatchNumber ?? '',
+  };
   localState.purchases.set(localKey(context), previous
     ? current.map((item) => item.id === saved.id ? saved : item)
     : [saved, ...current]);
   return { ...saved };
 }
 
+export async function listSupermarketPurchaseReceipts(
+  context: SupermarketContext,
+  orderId?: string,
+): Promise<SupermarketPurchaseReceiptRecord[]> {
+  if (isServerSupabaseAdminConfigured) {
+    if (orderId && !isUuid(orderId)) throw new ApiError(400, 'La compra no es valida.', 'INVALID_PURCHASE_ID');
+    const { data, error } = await createAdminServerClient().rpc('supermarket_list_purchase_receipts', {
+      p_company_id: context.companyId, p_branch_id: branchId(context), p_order_id: orderId ?? null,
+    });
+    if (error) throw new ApiError(503, 'No se pudo consultar el historial de recepciones.', 'PURCHASE_RECEIPTS_UNAVAILABLE');
+    return ((data ?? []) as DatabasePurchaseReceipt[]).map(mapPurchaseReceipt);
+  }
+  if (process.env.NODE_ENV === 'production') persistenceUnavailable();
+  return (localState.purchaseReceipts.get(localKey(context)) ?? [])
+    .filter((item) => !orderId || item.orderId === orderId).map((item) => ({ ...item }));
+}
+
 export async function receiveSupermarketPurchase(
   context: SupermarketContext,
-  orderId: string,
-): Promise<void> {
+  input: SupermarketPurchaseReceiptInput,
+): Promise<SupermarketPurchaseReceiptResult> {
   if (isServerSupabaseAdminConfigured) {
-    if (!isUuid(orderId)) throw new ApiError(400, 'La compra no es valida.', 'INVALID_PURCHASE_ID');
-    const { error } = await createAdminServerClient().rpc('supermarket_receive_purchase', {
-      p_company_id: context.companyId,
-      p_branch_id: branchId(context),
-      p_user_id: context.userId,
-      p_order_id: orderId,
+    if (!isUuid(input.orderId)) throw new ApiError(400, 'La compra no es valida.', 'INVALID_PURCHASE_ID');
+    const { data, error } = await createAdminServerClient().rpc('supermarket_receive_purchase_partial', {
+      p_company_id: context.companyId, p_branch_id: branchId(context), p_user_id: context.userId,
+      p_order_id: input.orderId, p_idempotency_key: input.idempotencyKey,
+      p_accepted_quantity: input.acceptedQuantity, p_rejected_quantity: input.rejectedQuantity,
+      p_lot_code: input.lotCode, p_expiration_date: input.expirationDate || null,
+      p_received_on: input.receivedOn, p_delivery_note_number: input.deliveryNoteNumber,
+      p_notes: input.notes,
     });
     if (error?.message.includes('PURCHASE_NOT_FOUND')) throw new ApiError(404, 'La compra no existe.', 'PURCHASE_NOT_FOUND');
-    if (error?.message.includes('PURCHASE_NOT_APPROVED')) throw new ApiError(409, 'La compra debe aprobarse antes de recibir mercaderia.', 'PURCHASE_NOT_APPROVED');
+    if (error?.message.includes('PURCHASE_NOT_RECEIVABLE')) throw new ApiError(409, 'La compra ya no admite recepciones.', 'PURCHASE_NOT_RECEIVABLE');
+    if (error?.message.includes('INVALID_PURCHASE_RECEIPT')) throw new ApiError(400, 'Las cantidades, fechas o lote de la recepcion no son validos.', 'INVALID_PURCHASE_RECEIPT');
     if (error) throw new ApiError(503, 'No se pudo recibir la compra.', 'SUPERMARKET_PURCHASES_UNAVAILABLE');
-    return;
+    return data as SupermarketPurchaseReceiptResult;
   }
   if (process.env.NODE_ENV === 'production') persistenceUnavailable();
 
+  const resultKey = `${context.companyId}:${input.idempotencyKey}`;
+  const previousResult = localState.purchaseReceiptResults.get(resultKey);
+  if (previousResult) return { ...previousResult, duplicate: true };
+
   const purchases = localPurchases(context);
-  const purchase = purchases.find((item) => item.id === orderId);
+  const purchase = purchases.find((item) => item.id === input.orderId);
   if (!purchase) throw new ApiError(404, 'La compra no existe.', 'PURCHASE_NOT_FOUND');
-  if (purchase.status === 'received') return;
-  if (purchase.status !== 'ordered') throw new ApiError(409, 'La compra debe aprobarse antes de recibir mercaderia.', 'PURCHASE_NOT_APPROVED');
+  if (purchase.status !== 'ordered' && purchase.status !== 'partially_received') {
+    throw new ApiError(409, 'La compra ya no admite recepciones.', 'PURCHASE_NOT_RECEIVABLE');
+  }
+  if (input.acceptedQuantity < 0 || input.rejectedQuantity < 0
+    || input.acceptedQuantity + input.rejectedQuantity <= 0
+    || input.acceptedQuantity + input.rejectedQuantity > purchase.remainingQuantity) {
+    throw new ApiError(400, 'Las cantidades de la recepcion no son validas.', 'INVALID_PURCHASE_RECEIPT');
+  }
   const products = localProducts(context);
   const product = products.find((item) => item.id === purchase.productId);
   if (!product) throw new ApiError(404, 'El producto no existe.', 'PRODUCT_NOT_FOUND');
-  const nextStock = product.stock + purchase.quantity;
+  const nextStock = product.stock + input.acceptedQuantity;
   const nextCost = nextStock > 0
-    ? ((product.stock * product.cost) + (purchase.quantity * purchase.unitCost)) / nextStock
+    ? ((product.stock * product.cost) + (input.acceptedQuantity * purchase.unitCost)) / nextStock
     : purchase.unitCost;
   localState.products.set(localKey(context), products.map((item) => item.id === product.id
     ? { ...item, stock: Number(nextStock.toFixed(3)), cost: Number(nextCost.toFixed(4)) }
     : item));
-  localState.purchases.set(localKey(context), purchases.map((item) => item.id === orderId
-    ? { ...item, status: 'received' }
+  const remainingQuantity = Number((purchase.remainingQuantity - input.acceptedQuantity).toFixed(3));
+  const orderStatus = remainingQuantity === 0 ? 'received' as const : 'partially_received' as const;
+  localState.purchases.set(localKey(context), purchases.map((item) => item.id === input.orderId
+    ? { ...item, status: orderStatus, receivedQuantity: item.receivedQuantity + input.acceptedQuantity,
+      rejectedQuantity: item.rejectedQuantity + input.rejectedQuantity, remainingQuantity,
+      receiptCount: item.receiptCount + 1 }
     : item));
-  localState.lots.set(localKey(context), [{
-    id: `lot-${crypto.randomUUID()}`,
-    productId: purchase.productId,
-    lotCode: purchase.lotCode || `OC-${purchase.id.slice(-8)}`,
-    quantity: purchase.quantity,
-    expirationDate: purchase.expirationDate,
-    receivedDate: new Date().toISOString().slice(0, 10),
-  }, ...localLots(context)]);
+  if (input.acceptedQuantity > 0) {
+    localState.lots.set(localKey(context), [{
+      id: `lot-${crypto.randomUUID()}`, productId: purchase.productId,
+      lotCode: input.lotCode || purchase.lotCode || `OC-${purchase.id.slice(-8)}`,
+      quantity: input.acceptedQuantity, expirationDate: input.expirationDate,
+      receivedDate: input.receivedOn,
+    }, ...localLots(context)]);
+  }
+  const reconciliationStatus: SupermarketReceiptReconciliation = !purchase.shipmentId ? 'without_asn'
+    : input.deliveryNoteNumber !== purchase.dispatchNumber ? 'document_mismatch'
+      : input.rejectedQuantity > 0 ? 'rejected_items'
+        : remainingQuantity > 0 ? 'partial' : 'matched';
+  const receipt: SupermarketPurchaseReceiptRecord = {
+    id: `receipt-${crypto.randomUUID()}`, receiptNumber: Date.now(), orderId: purchase.id,
+    orderNumber: 0, supplierName: purchase.supplier, productId: purchase.productId, productName: product.name,
+    shipmentId: purchase.shipmentId, deliveryNoteNumber: input.deliveryNoteNumber,
+    receivedOn: input.receivedOn, orderedQuantity: purchase.quantity,
+    previouslyReceived: purchase.receivedQuantity, acceptedQuantity: input.acceptedQuantity,
+    rejectedQuantity: input.rejectedQuantity, remainingQuantity, lotCode: input.lotCode,
+    expirationDate: input.expirationDate, reconciliationStatus, orderStatus,
+    notes: input.notes, createdAt: new Date().toISOString(),
+  };
+  localState.purchaseReceipts.set(localKey(context), [receipt, ...(localState.purchaseReceipts.get(localKey(context)) ?? [])]);
+  const result: SupermarketPurchaseReceiptResult = {
+    receiptId: receipt.id, receiptNumber: receipt.receiptNumber, orderStatus,
+    acceptedQuantity: input.acceptedQuantity, rejectedQuantity: input.rejectedQuantity,
+    remainingQuantity, reconciliationStatus, duplicate: false,
+  };
+  localState.purchaseReceiptResults.set(resultKey, result);
+  return result;
 }
 
 export async function listSupermarketLots(context: SupermarketContext): Promise<SupermarketLotRecord[]> {

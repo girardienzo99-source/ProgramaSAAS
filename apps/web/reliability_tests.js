@@ -566,7 +566,7 @@ test('supermercado exige aprobaciones auditables antes de recibir compras', () =
   assert.match(supply, /Solicitar aprobacion/);
   assert.match(supply, /El solicitante nunca puede decidir su propia compra/);
   assert.match(workspace, /purchase\.status === 'ordered'/);
-  assert.match(fs.readFileSync(path.join(__dirname, 'src/lib/api/supermarketRepository.ts'), 'utf8'), /purchase\.status !== 'ordered'.*PURCHASE_NOT_APPROVED/);
+  assert.match(fs.readFileSync(path.join(__dirname, 'src/lib/api/supermarketRepository.ts'), 'utf8'), /purchase\.status !== 'ordered'.*purchase\.status !== 'partially_received'.*PURCHASE_NOT_RECEIVABLE/s);
 });
 
 test('portal de proveedores aisla ordenes y confirma entregas con tokens temporales', () => {
@@ -649,6 +649,47 @@ test('proveedores anuncian despachos y adjuntan remitos PDF privados', () => {
   assert.match(portal, /Remito PDF \(maximo 10 MB\)/);
   assert.doesNotMatch(portal, /localStorage|sessionStorage|document\.cookie/);
   assert.match(supply, /Avisos de despacho/);
+});
+
+test('supermercado recibe compras por partes y concilia ASN con eventos EDI', () => {
+  const migration = fs.readFileSync(
+    path.join(__dirname, '../../packages/database/supabase/migrations/20260718000034_supermarket_partial_receipts.sql'),
+    'utf8',
+  );
+  const repository = fs.readFileSync(path.join(__dirname, 'src/lib/api/supermarketRepository.ts'), 'utf8');
+  const purchasesRoute = fs.readFileSync(path.join(__dirname, 'src/app/api/rubros/supermarket/purchases/route.ts'), 'utf8');
+  const receiptsRoute = fs.readFileSync(path.join(__dirname, 'src/app/api/rubros/supermarket/purchase-receipts/route.ts'), 'utf8');
+  const workspace = fs.readFileSync(path.join(__dirname, 'src/components/supermarket/SupermarketWorkspaceConsole.tsx'), 'utf8');
+  const supplierPortalRepository = fs.readFileSync(path.join(__dirname, 'src/lib/api/supermarketSupplierPortalRepository.ts'), 'utf8');
+  const supplierPortal = fs.readFileSync(path.join(__dirname, 'src/components/supermarket/SupplierPortalConsole.tsx'), 'utf8');
+
+  ['supermarket_purchase_receipts', 'supermarket_purchase_receipt_lines', 'supermarket_edi_outbox'].forEach((table) => {
+    assert.match(migration, new RegExp(`CREATE TABLE IF NOT EXISTS public\\.${table}`));
+  });
+  assert.match(migration, /status IN \('draft', 'ordered', 'partially_received', 'received', 'cancelled'\)/);
+  assert.match(migration, /UNIQUE\(company_id, idempotency_key\)/g);
+  assert.match(migration, /pg_advisory_xact_lock/);
+  assert.match(migration, /p_accepted_quantity \+ p_rejected_quantity > v_remaining_before/);
+  assert.match(migration, /quantity = quantity \+ p_accepted_quantity/);
+  assert.match(migration, /quantity_received.*p_accepted_quantity/s);
+  assert.match(migration, /'document_mismatch'/);
+  assert.match(migration, /'DESADV'/);
+  assert.match(migration, /'RECADV'/);
+  assert.match(migration, /public\.jwt_business_type\(\) = 'supermarket'/g);
+  assert.match(migration, /supermarket_list_purchase_receipts/);
+  assert.match(migration, /o\.status IN \('ordered', 'partially_received', 'received'\)/);
+  assert.match(migration, /po\.status = 'received' AND COALESCE\(receipts\.count, 0\) = 0/);
+  assert.match(repository, /supermarket_receive_purchase_partial/);
+  assert.match(repository, /listSupermarketPurchaseReceipts/);
+  assert.match(repository, /input\.acceptedQuantity \+ input\.rejectedQuantity > purchase\.remainingQuantity/);
+  assert.match(purchasesRoute, /requiredIdempotencyKey/);
+  assert.ok(purchasesRoute.indexOf('authorizeRequest(request') < purchasesRoute.indexOf('readJsonObject(request)'));
+  assert.match(receiptsRoute, /supermarket\.purchase_receipts\.read/);
+  assert.match(workspace, /Registrar recepcion parcial/);
+  assert.match(workspace, /Historial de recepciones/);
+  assert.match(workspace, /Solo la cantidad aceptada incrementara stock y lote/);
+  assert.match(supplierPortalRepository, /receivedQuantity/);
+  assert.match(supplierPortal, /Recepcion parcial/);
 });
 
 test('supermercado persiste catalogo, compras y lotes con recepcion atomica', () => {

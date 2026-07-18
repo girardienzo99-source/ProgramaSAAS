@@ -692,6 +692,48 @@ test('supermercado recibe compras por partes y concilia ASN con eventos EDI', ()
   assert.match(supplierPortal, /Recepcion parcial/);
 });
 
+test('supermercado abre y resuelve reclamos de recepcion con auditoria y COMDIS', () => {
+  const migration = fs.readFileSync(
+    path.join(__dirname, '../../packages/database/supabase/migrations/20260718000035_supermarket_supplier_claims.sql'),
+    'utf8',
+  );
+  const repository = fs.readFileSync(path.join(__dirname, 'src/lib/api/supermarketSupplierPortalRepository.ts'), 'utf8');
+  const internalRoute = fs.readFileSync(path.join(__dirname, 'src/app/api/rubros/supermarket/supplier-claims/route.ts'), 'utf8');
+  const publicRoute = fs.readFileSync(path.join(__dirname, 'src/app/api/public/v1/supplier-portal/claims/route.ts'), 'utf8');
+  const internalConsole = fs.readFileSync(path.join(__dirname, 'src/components/supermarket/SupermarketSupplierClaimsConsole.tsx'), 'utf8');
+  const supplierPortal = fs.readFileSync(path.join(__dirname, 'src/components/supermarket/SupplierPortalConsole.tsx'), 'utf8');
+
+  ['supermarket_supplier_claims', 'supermarket_supplier_claim_events'].forEach((table) => {
+    assert.match(migration, new RegExp(`CREATE TABLE IF NOT EXISTS public\\.${table}`));
+  });
+  ['supermarket_list_supplier_claims', 'supermarket_update_supplier_claim', 'supermarket_supplier_portal_claims', 'supermarket_supplier_respond_claim'].forEach((fn) => {
+    assert.match(migration, new RegExp(`FUNCTION public\\.${fn}`));
+    assert.match(repository, new RegExp(`'${fn}'`));
+  });
+  assert.match(migration, /AFTER INSERT ON public\.supermarket_purchase_receipt_lines/);
+  assert.match(migration, /NEW\.rejected_quantity > 0|v_receipt\.rejected_quantity > 0/);
+  assert.match(migration, /UNIQUE\(company_id, receipt_id\)/);
+  assert.match(migration, /UNIQUE\(company_id, idempotency_key\)/);
+  assert.match(migration, /pg_advisory_xact_lock/);
+  assert.match(migration, /event_type IN \('DESADV', 'RECADV', 'COMDIS'\)/);
+  assert.match(migration, /'COMDIS:' \|\| NEW\.id::TEXT \|\| ':' \|\| NEW\.status/);
+  assert.match(migration, /public\.jwt_business_type\(\) = 'supermarket'/g);
+  assert.match(migration, /status = 'resolved'.*INVALID_CLAIM_TRANSITION/s);
+  assert.match(migration, /c\.supplier_id = v_supplier\.id OR lower\(trim\(c\.supplier_name\)\)/);
+  assert.match(internalRoute, /supermarket\.supplier_claims\.read/);
+  assert.match(internalRoute, /supermarket\.supplier_claims\.manage/);
+  assert.match(internalRoute, /requiredIdempotencyKey/);
+  assert.ok(internalRoute.indexOf('authorizeRequest(request') < internalRoute.indexOf('readJsonObject(request)'));
+  assert.match(publicRoute, /consumePublicRateLimit/);
+  assert.match(publicRoute, /requiredIdempotencyKey/);
+  assert.ok(publicRoute.indexOf('authenticate(request)') < publicRoute.indexOf('readJsonObject(request)'));
+  assert.match(internalConsole, /Reclamos a proveedores/);
+  assert.match(internalConsole, /Resolver reclamo/);
+  assert.match(supplierPortal, /Reclamos y diferencias/);
+  assert.match(supplierPortal, /Objetar diferencia/);
+  assert.doesNotMatch(supplierPortal, /localStorage|sessionStorage|document\.cookie/);
+});
+
 test('supermercado persiste catalogo, compras y lotes con recepcion atomica', () => {
   const migration = fs.readFileSync(
     path.join(__dirname, '../../packages/database/supabase/migrations/20260718000023_supermarket_domain.sql'),

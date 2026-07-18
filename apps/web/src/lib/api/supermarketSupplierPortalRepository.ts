@@ -18,6 +18,37 @@ export interface SupermarketSupplierPortalAccessRecord {
 
 export type SupplierDeliveryStatus = 'confirmed' | 'rescheduled' | 'unavailable';
 export type SupplierShipmentStatus = 'announced' | 'in_transit' | 'delivered' | 'cancelled';
+export type SupplierClaimStatus = 'open' | 'acknowledged' | 'disputed' | 'resolved';
+export type SupplierClaimType = 'partial_delivery' | 'rejected_items' | 'document_mismatch' | 'missing_asn';
+
+export interface SupplierPortalClaim {
+  id: string;
+  claimNumber: number;
+  orderId: string;
+  orderNumber: number | null;
+  receiptNumber: number;
+  productName: string;
+  claimType: SupplierClaimType;
+  status: SupplierClaimStatus;
+  priority: 'normal' | 'urgent';
+  subject: string;
+  description: string;
+  claimedQuantity: number;
+  responseDueOn: string;
+  resolutionNotes: string;
+  acknowledgedAt: string | null;
+  resolvedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SupermarketSupplierClaimRecord extends SupplierPortalClaim {
+  supplierId: string | null;
+  supplierName: string;
+  receiptId: string;
+  productId: string;
+  eventCount: number;
+}
 
 export interface SupplierPortalShipment {
   id: string;
@@ -66,6 +97,7 @@ export interface SupplierPortalSnapshot {
   supplier: { id: string; name: string; email: string; phone: string };
   access: { label: string; expiresAt: string };
   orders: SupplierPortalOrder[];
+  claims: SupplierPortalClaim[];
 }
 
 interface LocalAccess extends SupermarketSupplierPortalAccessRecord {
@@ -96,21 +128,31 @@ interface LocalShipment extends SupplierPortalShipment {
   updatedAt: string;
 }
 
+interface LocalClaim extends SupermarketSupplierClaimRecord {
+  companyId: string;
+  branchId: string;
+}
+
 interface LocalPortalState {
   access: LocalAccess[];
   confirmations: Map<string, LocalConfirmation>;
   results: Map<string, { confirmationId: string; status: SupplierDeliveryStatus; duplicate: boolean }>;
   shipments: Map<string, LocalShipment>;
   shipmentResults: Map<string, { shipmentId: string; status: SupplierShipmentStatus; duplicate: boolean }>;
+  claims: Map<string, LocalClaim>;
+  claimResults: Map<string, { claimId: string; status: SupplierClaimStatus; duplicate: boolean }>;
 }
 
 const globalPortal = globalThis as typeof globalThis & { __programaSassSupplierPortal?: LocalPortalState };
 const localState: LocalPortalState = globalPortal.__programaSassSupplierPortal ?? {
   access: [], confirmations: new Map(), results: new Map(),
   shipments: new Map(), shipmentResults: new Map(),
+  claims: new Map(), claimResults: new Map(),
 };
 localState.shipments ??= new Map();
 localState.shipmentResults ??= new Map();
+localState.claims ??= new Map();
+localState.claimResults ??= new Map();
 globalPortal.__programaSassSupplierPortal = localState;
 
 function branchId(context: SupermarketContext): string {
@@ -148,9 +190,11 @@ function mapSnapshot(value: unknown): SupplierPortalSnapshot {
   const supplier = (item.supplier ?? {}) as Record<string, unknown>;
   const access = (item.access ?? {}) as Record<string, unknown>;
   const orders = Array.isArray(item.orders) ? item.orders as Array<Record<string, unknown>> : [];
+  const claims = Array.isArray(item.claims) ? item.claims as Array<Record<string, unknown>> : [];
   return {
     supplier: { id: String(supplier.id), name: String(supplier.name), email: String(supplier.email ?? ''), phone: String(supplier.phone ?? '') },
     access: { label: String(access.label), expiresAt: String(access.expiresAt) },
+    claims: claims.map(mapPortalClaim),
     orders: orders.map((order) => {
       const shipment = order.shipment && typeof order.shipment === 'object'
         ? order.shipment as Record<string, unknown>
@@ -174,6 +218,34 @@ function mapSnapshot(value: unknown): SupplierPortalSnapshot {
       } : null,
     };
     }),
+  };
+}
+
+function mapPortalClaim(item: Record<string, unknown>): SupplierPortalClaim {
+  return {
+    id: String(item.id), claimNumber: Number(item.claim_number ?? item.claimNumber),
+    orderId: String(item.order_id ?? item.orderId),
+    orderNumber: (item.order_number ?? item.orderNumber) === null ? null : Number(item.order_number ?? item.orderNumber),
+    receiptNumber: Number(item.receipt_number ?? item.receiptNumber),
+    productName: String(item.product_name ?? item.productName),
+    claimType: String(item.claim_type ?? item.claimType) as SupplierClaimType,
+    status: String(item.status) as SupplierClaimStatus,
+    priority: String(item.priority) as SupplierPortalClaim['priority'],
+    subject: String(item.subject), description: String(item.description ?? ''),
+    claimedQuantity: Number(item.claimed_quantity ?? item.claimedQuantity ?? 0),
+    responseDueOn: String(item.response_due_on ?? item.responseDueOn),
+    resolutionNotes: String(item.resolution_notes ?? item.resolutionNotes ?? ''),
+    acknowledgedAt: (item.acknowledged_at ?? item.acknowledgedAt) ? String(item.acknowledged_at ?? item.acknowledgedAt) : null,
+    resolvedAt: (item.resolved_at ?? item.resolvedAt) ? String(item.resolved_at ?? item.resolvedAt) : null,
+    createdAt: String(item.created_at ?? item.createdAt), updatedAt: String(item.updated_at ?? item.updatedAt),
+  };
+}
+
+function mapClaim(item: Record<string, unknown>): SupermarketSupplierClaimRecord {
+  return {
+    ...mapPortalClaim(item), supplierId: item.supplier_id ? String(item.supplier_id) : null,
+    supplierName: String(item.supplier_name), receiptId: String(item.receipt_id),
+    productId: String(item.product_id), eventCount: Number(item.event_count ?? 0),
   };
 }
 
@@ -273,6 +345,61 @@ export async function listSupplierShipments(
     .map(({ companyId: _companyId, branchId: _branchId, idempotencyKey: _key, ...item }) => ({ ...item }));
 }
 
+export async function listSupermarketSupplierClaims(
+  context: SupermarketContext,
+  filters: { supplierId?: string; status?: SupplierClaimStatus } = {},
+): Promise<SupermarketSupplierClaimRecord[]> {
+  if (isServerSupabaseAdminConfigured) {
+    if (filters.supplierId && !isUuid(filters.supplierId)) throw new ApiError(400, 'El proveedor no es valido.', 'INVALID_SUPPLIER_ID');
+    const { data, error } = await createAdminServerClient().rpc('supermarket_list_supplier_claims', {
+      p_company_id: context.companyId, p_branch_id: branchId(context),
+      p_supplier_id: filters.supplierId ?? null, p_status: filters.status ?? null,
+    });
+    if (error?.message.includes('INVALID_CLAIM_STATUS')) throw new ApiError(400, 'El estado del reclamo no es valido.', 'INVALID_CLAIM_STATUS');
+    if (error) unavailable();
+    return ((data ?? []) as Array<Record<string, unknown>>).map(mapClaim);
+  }
+  if (process.env.NODE_ENV === 'production') unavailable();
+  return [...localState.claims.values()]
+    .filter((item) => item.companyId === context.companyId && item.branchId === branchId(context)
+      && (!filters.supplierId || item.supplierId === filters.supplierId)
+      && (!filters.status || item.status === filters.status))
+    .map(({ companyId: _companyId, branchId: _branchId, ...item }) => ({ ...item }));
+}
+
+export async function updateSupermarketSupplierClaim(
+  context: SupermarketContext,
+  input: { claimId: string; idempotencyKey: string; status: Exclude<SupplierClaimStatus, 'open'>; notes: string },
+) {
+  if (isServerSupabaseAdminConfigured) {
+    if (!isUuid(input.claimId)) throw new ApiError(400, 'El reclamo no es valido.', 'INVALID_CLAIM_ID');
+    const { data, error } = await createAdminServerClient().rpc('supermarket_update_supplier_claim', {
+      p_company_id: context.companyId, p_branch_id: branchId(context), p_user_id: context.userId,
+      p_claim_id: input.claimId, p_idempotency_key: input.idempotencyKey,
+      p_status: input.status, p_notes: input.notes,
+    });
+    if (error?.message.includes('SUPPLIER_CLAIM_NOT_FOUND')) throw new ApiError(404, 'El reclamo no existe.', 'SUPPLIER_CLAIM_NOT_FOUND');
+    if (error?.message.includes('INVALID_CLAIM_TRANSITION')) throw new ApiError(409, 'El reclamo ya no admite ese cambio.', 'INVALID_CLAIM_TRANSITION');
+    if (error) unavailable();
+    return data as { claimId: string; status: SupplierClaimStatus; duplicate: boolean };
+  }
+  if (process.env.NODE_ENV === 'production') unavailable();
+  const resultKey = `${context.companyId}:${input.idempotencyKey}`;
+  const previous = localState.claimResults.get(resultKey);
+  if (previous) return { ...previous, duplicate: true };
+  const claim = localState.claims.get(input.claimId);
+  if (!claim || claim.companyId !== context.companyId || claim.branchId !== branchId(context)) {
+    throw new ApiError(404, 'El reclamo no existe.', 'SUPPLIER_CLAIM_NOT_FOUND');
+  }
+  if (claim.status === 'resolved' || claim.status === input.status) throw new ApiError(409, 'El reclamo ya no admite ese cambio.', 'INVALID_CLAIM_TRANSITION');
+  claim.status = input.status; claim.updatedAt = new Date().toISOString(); claim.eventCount += 1;
+  if (input.status === 'acknowledged') claim.acknowledgedAt ??= claim.updatedAt;
+  if (input.status === 'resolved') { claim.resolvedAt = claim.updatedAt; claim.resolutionNotes = input.notes; }
+  const result = { claimId: claim.id, status: claim.status, duplicate: false };
+  localState.claimResults.set(resultKey, result);
+  return result;
+}
+
 async function createPrivateDocumentUrl(path: string, fileName: string) {
   const { data, error } = await createAdminServerClient().storage.from('private-assets').createSignedUrl(path, 300, {
     download: fileName || 'remito.pdf',
@@ -294,10 +421,17 @@ export async function getInternalSupplierShipmentDocumentUrl(context: Supermarke
 export async function getSupplierPortalSnapshot(token: string): Promise<SupplierPortalSnapshot> {
   const tokenHash = supplierPortalTokenHash(token);
   if (isServerSupabaseAdminConfigured) {
-    const { data, error } = await createAdminServerClient().rpc('supermarket_supplier_portal_snapshot', { p_token_hash: tokenHash });
-    if (error?.message.includes('INVALID_SUPPLIER_PORTAL_TOKEN')) throw new ApiError(401, 'El enlace expiro o fue revocado.', 'UNAUTHORIZED');
-    if (error) unavailable();
-    return mapSnapshot(data);
+    const client = createAdminServerClient();
+    const [snapshotResult, claimResult] = await Promise.all([
+      client.rpc('supermarket_supplier_portal_snapshot', { p_token_hash: tokenHash }),
+      client.rpc('supermarket_supplier_portal_claims', { p_token_hash: tokenHash }),
+    ]);
+    if (snapshotResult.error?.message.includes('INVALID_SUPPLIER_PORTAL_TOKEN') || claimResult.error?.message.includes('INVALID_SUPPLIER_PORTAL_TOKEN')) {
+      throw new ApiError(401, 'El enlace expiro o fue revocado.', 'UNAUTHORIZED');
+    }
+    if (snapshotResult.error || claimResult.error) unavailable();
+    const snapshot = (snapshotResult.data ?? {}) as Record<string, unknown>;
+    return mapSnapshot({ ...snapshot, claims: claimResult.data ?? [] });
   }
   if (process.env.NODE_ENV === 'production') unavailable();
   const access = localState.access.find((item) => item.tokenHash === tokenHash && item.active && new Date(item.expiresAt).getTime() > Date.now());
@@ -321,7 +455,47 @@ export async function getSupplierPortalSnapshot(token: string): Promise<Supplier
       shipment: localState.shipments.get(`${access.companyId}:${order.id}`) ?? null,
     };
   });
-  return { supplier: { id: supplier.id, name: supplier.name, email: supplier.email, phone: supplier.phone }, access: { label: access.label, expiresAt: access.expiresAt }, orders };
+  const claims = [...localState.claims.values()]
+    .filter((item) => item.companyId === access.companyId && item.branchId === access.branchId
+      && (item.supplierId === supplier.id || item.supplierName.toLowerCase() === supplier.name.toLowerCase()))
+    .map(({ companyId: _companyId, branchId: _branchId, supplierId: _supplierId, supplierName: _supplierName,
+      receiptId: _receiptId, productId: _productId, eventCount: _eventCount, ...item }) => ({ ...item }));
+  return { supplier: { id: supplier.id, name: supplier.name, email: supplier.email, phone: supplier.phone }, access: { label: access.label, expiresAt: access.expiresAt }, orders, claims };
+}
+
+export async function respondSupplierPortalClaim(
+  token: string,
+  input: { claimId: string; idempotencyKey: string; status: 'acknowledged' | 'disputed'; notes: string },
+) {
+  const tokenHash = supplierPortalTokenHash(token);
+  if (isServerSupabaseAdminConfigured) {
+    if (!isUuid(input.claimId)) throw new ApiError(400, 'El reclamo no es valido.', 'INVALID_CLAIM_ID');
+    const { data, error } = await createAdminServerClient().rpc('supermarket_supplier_respond_claim', {
+      p_token_hash: tokenHash, p_claim_id: input.claimId, p_idempotency_key: input.idempotencyKey,
+      p_status: input.status, p_notes: input.notes,
+    });
+    if (error?.message.includes('INVALID_SUPPLIER_PORTAL_TOKEN')) throw new ApiError(401, 'El enlace expiro o fue revocado.', 'UNAUTHORIZED');
+    if (error?.message.includes('SUPPLIER_CLAIM_NOT_FOUND')) throw new ApiError(404, 'El reclamo no pertenece a este proveedor.', 'SUPPLIER_CLAIM_NOT_FOUND');
+    if (error?.message.includes('INVALID_CLAIM_TRANSITION')) throw new ApiError(409, 'El reclamo ya no admite esa respuesta.', 'INVALID_CLAIM_TRANSITION');
+    if (error) unavailable();
+    return data as { claimId: string; status: SupplierClaimStatus; duplicate: boolean };
+  }
+  if (process.env.NODE_ENV === 'production') unavailable();
+  const access = localState.access.find((item) => item.tokenHash === tokenHash && item.active && new Date(item.expiresAt).getTime() > Date.now());
+  if (!access) throw new ApiError(401, 'El enlace expiro o fue revocado.', 'UNAUTHORIZED');
+  const resultKey = `${access.companyId}:${input.idempotencyKey}`;
+  const previous = localState.claimResults.get(resultKey);
+  if (previous) return { ...previous, duplicate: true };
+  const claim = localState.claims.get(input.claimId);
+  if (!claim || claim.companyId !== access.companyId || claim.branchId !== access.branchId || claim.supplierId !== access.supplierId) {
+    throw new ApiError(404, 'El reclamo no pertenece a este proveedor.', 'SUPPLIER_CLAIM_NOT_FOUND');
+  }
+  if (claim.status === 'resolved' || claim.status === input.status) throw new ApiError(409, 'El reclamo ya no admite esa respuesta.', 'INVALID_CLAIM_TRANSITION');
+  claim.status = input.status; claim.updatedAt = new Date().toISOString(); claim.eventCount += 1;
+  if (input.status === 'acknowledged') claim.acknowledgedAt ??= claim.updatedAt;
+  const result = { claimId: claim.id, status: claim.status, duplicate: false };
+  localState.claimResults.set(resultKey, result);
+  return result;
 }
 
 export async function confirmSupplierPortalDelivery(

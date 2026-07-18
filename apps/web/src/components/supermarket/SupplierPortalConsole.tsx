@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import {
+  AlertTriangle,
   CalendarClock,
   CheckCircle2,
   Clock3,
@@ -19,6 +20,7 @@ import {
 import type {
   SupplierDeliveryStatus,
   SupplierPortalOrder,
+  SupplierPortalClaim,
   SupplierPortalShipment,
   SupplierPortalSnapshot,
 } from '@/lib/api/supermarketSupplierPortalRepository';
@@ -37,6 +39,12 @@ interface ShipmentDraft {
   palletCount: number;
   notes: string;
   document: File | null;
+}
+
+interface ClaimResponseDraft {
+  claim: SupplierPortalClaim;
+  status: 'acknowledged' | 'disputed';
+  notes: string;
 }
 
 async function parseResponse<T>(response: Response): Promise<T> {
@@ -58,6 +66,7 @@ export default function SupplierPortalConsole() {
   const [portal, setPortal] = useState<SupplierPortalSnapshot | null>(null);
   const [delivery, setDelivery] = useState<{ order: SupplierPortalOrder; status: SupplierDeliveryStatus; promisedDate: string; notes: string } | null>(null);
   const [shipment, setShipment] = useState<ShipmentDraft | null>(null);
+  const [claimResponse, setClaimResponse] = useState<ClaimResponseDraft | null>(null);
   const [loading, setLoading] = useState(true);
   const [feedback, setFeedback] = useState('');
   const [feedbackTone, setFeedbackTone] = useState<'success' | 'error'>('success');
@@ -159,6 +168,30 @@ export default function SupplierPortalConsole() {
     }
   };
 
+  const respondClaim = async () => {
+    if (!claimResponse) return;
+    setLoading(true);
+    try {
+      await portalJsonRequest(token, '/api/public/v1/supplier-portal/claims', {
+        method: 'PATCH',
+        headers: { 'Idempotency-Key': `supplier-claim:${crypto.randomUUID()}` },
+        body: JSON.stringify({
+          claimId: claimResponse.claim.id,
+          status: claimResponse.status,
+          notes: claimResponse.notes,
+        }),
+      });
+      setClaimResponse(null);
+      await load(token);
+      setFeedbackTone('success');
+      setFeedback('Respuesta del reclamo enviada.');
+    } catch (error) {
+      setFeedbackTone('error');
+      setFeedback(error instanceof Error ? error.message : 'No se pudo responder el reclamo.');
+      setLoading(false);
+    }
+  };
+
   const openDocument = async (item: SupplierPortalShipment) => {
     try {
       const response = await portalJsonRequest<{ item: { url: string } }>(token, `/api/public/v1/supplier-portal/shipments?shipmentId=${encodeURIComponent(item.id)}`);
@@ -180,6 +213,7 @@ export default function SupplierPortalConsole() {
   const pending = useMemo(() => portal?.orders.filter((order) => order.status !== 'received').length ?? 0, [portal]);
   const confirmed = useMemo(() => portal?.orders.filter((order) => order.deliveryStatus === 'confirmed' || order.deliveryStatus === 'rescheduled').length ?? 0, [portal]);
   const announced = useMemo(() => portal?.orders.filter((order) => order.shipment).length ?? 0, [portal]);
+  const activeClaims = useMemo(() => portal?.claims.filter((claim) => claim.status !== 'resolved').length ?? 0, [portal]);
 
   if (!portal) {
     return <main className="min-h-screen bg-slate-100 text-slate-950">
@@ -200,12 +234,24 @@ export default function SupplierPortalConsole() {
     <header className="sticky top-0 z-20 border-b border-slate-200 bg-white"><div className="mx-auto flex min-h-16 max-w-6xl items-center justify-between gap-3 px-4 py-3"><div className="flex min-w-0 items-center gap-3"><div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-emerald-600 font-bold text-white">S</div><div className="min-w-0"><p className="truncate font-bold">{portal.supplier.name}</p><p className="truncate text-xs text-slate-500">{portal.access.label}</p></div></div><button onClick={disconnect} aria-label="Cerrar acceso" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-slate-300 text-slate-600"><LogOut className="h-4 w-4" /></button></div></header>
     <div className="mx-auto max-w-6xl space-y-6 px-4 py-6">
       <section><div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-end"><div><p className="text-xs font-bold uppercase text-emerald-700">Ordenes autorizadas</p><h1 className="text-2xl font-bold">Entregas del proveedor</h1><p className="text-sm text-slate-500">Acceso vigente hasta {new Date(portal.access.expiresAt).toLocaleDateString('es-AR')}.</p></div><button onClick={() => void load(token)} disabled={loading} aria-label="Actualizar ordenes" className="flex h-10 w-10 items-center justify-center rounded-md border border-slate-300 bg-white"><RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /></button></div>{feedback && <Feedback tone={feedbackTone} text={feedback} />}</section>
-      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"><Metric icon={Truck} label="Por entregar" value={String(pending)} /><Metric icon={CheckCircle2} label="Confirmadas" value={String(confirmed)} /><Metric icon={Send} label="Despachos" value={String(announced)} /><Metric icon={PackageCheck} label="Recibidas" value={String(portal.orders.filter((order) => order.status === 'received').length)} /></section>
+      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5"><Metric icon={Truck} label="Por entregar" value={String(pending)} /><Metric icon={CheckCircle2} label="Confirmadas" value={String(confirmed)} /><Metric icon={Send} label="Despachos" value={String(announced)} /><Metric icon={PackageCheck} label="Recibidas" value={String(portal.orders.filter((order) => order.status === 'received').length)} /><Metric icon={AlertTriangle} label="Reclamos activos" value={String(activeClaims)} /></section>
+      <section><div className="mb-3 flex items-center gap-2"><AlertTriangle className="h-4 w-4 text-amber-700" /><h2 className="font-bold">Reclamos y diferencias</h2></div><div className="grid gap-4 lg:grid-cols-2">{portal.claims.map((claim) => <ClaimCard key={claim.id} claim={claim} onRespond={(status) => setClaimResponse({ claim, status, notes: '' })} />)}</div>{!portal.claims.length && <p className="border border-slate-200 bg-white py-10 text-center text-sm text-slate-500">No hay diferencias de recepcion registradas.</p>}</section>
       <section><h2 className="mb-3 font-bold">Ordenes de compra</h2><div className="grid gap-4 lg:grid-cols-2">{portal.orders.map((order) => <OrderCard key={order.id} order={order} onDelivery={() => setDelivery({ order, status: order.deliveryStatus ?? 'confirmed', promisedDate: order.promisedDate || order.expectedDate || today(), notes: order.notes })} onShipment={() => setShipment(shipmentDraft(order))} onDocument={openDocument} />)}</div>{!portal.orders.length && <p className="rounded-lg border border-slate-200 bg-white py-12 text-center text-sm text-slate-500">No hay ordenes disponibles.</p>}</section>
     </div>
     {delivery && <DeliveryModal delivery={delivery} setDelivery={setDelivery} loading={loading} onConfirm={confirmDelivery} />}
     {shipment && <ShipmentModal shipment={shipment} setShipment={setShipment} loading={loading} onSave={saveShipment} />}
+    {claimResponse && <ClaimResponseModal draft={claimResponse} setDraft={setClaimResponse} loading={loading} onConfirm={respondClaim} />}
   </main>;
+}
+
+function ClaimCard({ claim, onRespond }: { claim: SupplierPortalClaim; onRespond: (status: 'acknowledged' | 'disputed') => void }) {
+  return <article className={`rounded-lg border bg-white p-5 shadow-sm ${claim.priority === 'urgent' && claim.status !== 'resolved' ? 'border-rose-200' : 'border-slate-200'}`}>
+    <div className="flex items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase text-slate-400">Reclamo #{claim.claimNumber} · OC {claim.orderNumber ?? claim.orderId.slice(0, 8)}</p><h3 className="mt-1 font-bold text-slate-950">{claim.subject}</h3><p className="text-sm text-slate-500">{claim.productName}</p></div><ClaimStatus value={claim.status} /></div>
+    <p className="mt-3 text-sm text-slate-600">{claim.description}</p>
+    <div className="mt-4 grid grid-cols-2 gap-3"><Value label="Cantidad reclamada" value={String(claim.claimedQuantity)} /><Value label="Responder antes de" value={new Date(`${claim.responseDueOn}T12:00:00`).toLocaleDateString('es-AR')} /></div>
+    {claim.resolutionNotes && <p className="mt-3 border-l-2 border-emerald-500 bg-emerald-50 p-3 text-sm text-emerald-900">{claim.resolutionNotes}</p>}
+    {claim.status !== 'resolved' && <div className="mt-4 grid grid-cols-2 gap-2"><button onClick={() => onRespond('acknowledged')} disabled={claim.status === 'acknowledged'} className="h-10 rounded-md border border-emerald-300 text-sm font-bold text-emerald-800 disabled:opacity-40">Acusar recibo</button><button onClick={() => onRespond('disputed')} disabled={claim.status === 'disputed'} className="h-10 rounded-md border border-rose-300 text-sm font-bold text-rose-700 disabled:opacity-40">Objetar diferencia</button></div>}
+  </article>;
 }
 
 function shipmentDraft(order: SupplierPortalOrder): ShipmentDraft {
@@ -246,6 +292,10 @@ function ShipmentModal({ shipment, setShipment, loading, onSave }: { shipment: S
   return <Modal title="Aviso de despacho" subtitle={shipment.order.productName} onClose={() => setShipment(null)} footer={<><Secondary onClick={() => setShipment(null)}>Cancelar</Secondary><Primary onClick={onSave} disabled={loading || !valid}>Registrar despacho</Primary></>}><div className="grid gap-4 sm:grid-cols-2"><TextField label="Numero de remito" value={shipment.dispatchNumber} set={(value) => setShipment({ ...shipment, dispatchNumber: value })} /><TextField label="Transportista" value={shipment.carrier} set={(value) => setShipment({ ...shipment, carrier: value })} /><TextField label="Seguimiento" value={shipment.trackingNumber} set={(value) => setShipment({ ...shipment, trackingNumber: value })} /><NumberField label="Bultos" value={shipment.packageCount} max={100000} set={(value) => setShipment({ ...shipment, packageCount: value })} /><NumberField label="Pallets" value={shipment.palletCount} max={10000} set={(value) => setShipment({ ...shipment, palletCount: value })} /><DateField label="Fecha de despacho" value={shipment.shippedOn} set={(value) => setShipment({ ...shipment, shippedOn: value })} /><DateField label="Arribo estimado" value={shipment.estimatedArrival} min={shipment.shippedOn} set={(value) => setShipment({ ...shipment, estimatedArrival: value })} /><label className="sm:col-span-2"><FieldLabel text="Remito PDF (maximo 10 MB)" /><span className="flex min-h-11 cursor-pointer items-center gap-2 rounded-md border border-dashed border-slate-300 px-3 text-sm text-slate-600"><Upload className="h-4 w-4" />{shipment.document?.name ?? (shipment.order.shipment?.documentName || 'Seleccionar archivo')}<input type="file" accept="application/pdf,.pdf" className="sr-only" onChange={(event) => setShipment({ ...shipment, document: event.target.files?.[0] ?? null })} /></span></label><label className="sm:col-span-2"><FieldLabel text="Observaciones" /><textarea rows={3} value={shipment.notes} onChange={(event) => setShipment({ ...shipment, notes: event.target.value })} className="w-full rounded-md border border-slate-300 p-3 text-sm" /></label></div></Modal>;
 }
 
+function ClaimResponseModal({ draft, setDraft, loading, onConfirm }: { draft: ClaimResponseDraft; setDraft: (value: ClaimResponseDraft | null) => void; loading: boolean; onConfirm: () => void }) {
+  return <Modal title={draft.status === 'disputed' ? 'Objetar diferencia' : 'Acusar recibo'} subtitle={`Reclamo #${draft.claim.claimNumber} - ${draft.claim.productName}`} onClose={() => setDraft(null)} footer={<><Secondary onClick={() => setDraft(null)}>Cancelar</Secondary><Primary onClick={onConfirm} disabled={loading || (draft.status === 'disputed' && !draft.notes.trim())}>Enviar respuesta</Primary></>}><div className="space-y-4"><label><FieldLabel text="Respuesta" /><select value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value as ClaimResponseDraft['status'] })} className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm"><option value="acknowledged">Acusar recibo</option><option value="disputed">Objetar diferencia</option></select></label><label><FieldLabel text="Observaciones" /><textarea rows={4} value={draft.notes} onChange={(event) => setDraft({ ...draft, notes: event.target.value })} placeholder="Informe reposicion, nota de credito o motivo de la objecion." className="w-full rounded-md border border-slate-300 p-3 text-sm" /></label></div></Modal>;
+}
+
 function Brand() { return <><div className="flex h-9 w-9 items-center justify-center rounded-md bg-emerald-600 font-bold text-white">S</div><div><p className="font-bold">SaaS Gestion</p><p className="text-xs text-slate-500">Portal de proveedores</p></div></>; }
 function Feedback({ tone, text }: { tone: 'success' | 'error'; text: string }) { return <p role={tone === 'error' ? 'alert' : 'status'} className={`mt-4 border-l-2 p-3 text-sm ${tone === 'error' ? 'border-rose-500 bg-rose-50 text-rose-700' : 'border-emerald-500 bg-emerald-50 text-emerald-800'}`}>{text}</p>; }
 function Metric({ icon: Icon, label, value }: { icon: typeof Truck; label: string; value: string }) { return <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm"><div className="flex items-center gap-2 text-slate-500"><Icon className="h-4 w-4" /><p className="text-xs font-bold uppercase">{label}</p></div><p className="mt-2 text-2xl font-bold">{value}</p></div>; }
@@ -258,3 +308,4 @@ function Primary({ onClick, disabled, children }: { onClick: () => void; disable
 function Secondary({ onClick, children }: { onClick: () => void; children: React.ReactNode }) { return <button onClick={onClick} className="h-10 rounded-md border border-slate-300 px-4 text-sm font-bold">{children}</button>; }
 function Modal({ title, subtitle, onClose, footer, children }: { title: string; subtitle: string; onClose: () => void; footer: React.ReactNode; children: React.ReactNode }) { return <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/50 sm:items-center sm:p-4" role="dialog" aria-modal="true" aria-label={title}><div className="max-h-[94vh] w-full max-w-2xl overflow-y-auto rounded-t-lg bg-white shadow-xl sm:rounded-lg"><div className="flex items-center justify-between border-b border-slate-200 px-5 py-4"><div><h2 className="font-bold">{title}</h2><p className="text-xs text-slate-500">{subtitle}</p></div><button onClick={onClose} aria-label="Cerrar" className="p-2 text-slate-500"><X className="h-5 w-5" /></button></div><div className="p-5">{children}</div><div className="flex justify-end gap-2 border-t border-slate-200 px-5 py-4">{footer}</div></div></div>; }
 function OrderStatus({ order }: { order: SupplierPortalOrder }) { if (order.status === 'received') return <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-xs font-bold text-slate-600"><PackageCheck className="h-3 w-3" />Recibida</span>; if (order.status === 'partially_received') return <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-1 text-xs font-bold text-amber-800"><PackageCheck className="h-3 w-3" />Recepcion parcial</span>; if (order.deliveryStatus === 'unavailable') return <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-1 text-xs font-bold text-rose-700"><XCircle className="h-3 w-3" />No disponible</span>; if (order.shipment) return <span className="inline-flex items-center gap-1 rounded-full bg-blue-100 px-2 py-1 text-xs font-bold text-blue-700"><Send className="h-3 w-3" />Despachada</span>; if (order.deliveryStatus) return <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-1 text-xs font-bold text-emerald-700"><CheckCircle2 className="h-3 w-3" />Confirmada</span>; return <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-1 text-xs font-bold text-amber-700"><Clock3 className="h-3 w-3" />Pendiente</span>; }
+function ClaimStatus({ value }: { value: SupplierPortalClaim['status'] }) { const style = value === 'resolved' ? 'bg-emerald-100 text-emerald-700' : value === 'disputed' ? 'bg-rose-100 text-rose-700' : value === 'acknowledged' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'; const label = value === 'resolved' ? 'Resuelto' : value === 'disputed' ? 'Objetado' : value === 'acknowledged' ? 'Acusado' : 'Abierto'; return <span className={`shrink-0 rounded-full px-2 py-1 text-xs font-bold ${style}`}>{label}</span>; }

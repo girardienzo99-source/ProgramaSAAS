@@ -10,10 +10,13 @@ import {
   Camera,
   ClipboardCheck,
   Image as ImageIcon,
+  LayoutGrid,
+  MapPin,
   PackageCheck,
   Pencil,
   Plus,
   Percent,
+  Printer,
   Search,
   ShoppingCart,
   Truck,
@@ -27,7 +30,7 @@ import SupermarketConsole, {
   type SupermarketSaleResult,
 } from './SupermarketConsole';
 
-type Area = 'pos' | 'catalog' | 'inventory' | 'purchases' | 'lots' | 'operations';
+type Area = 'pos' | 'catalog' | 'inventory' | 'purchases' | 'lots' | 'operations' | 'layout';
 type ProductFilter = 'all' | 'active' | 'paused' | 'low' | 'expiring';
 type PurchaseStatus = 'draft' | 'ordered' | 'received';
 
@@ -87,6 +90,54 @@ interface Transfer {
   createdAt: string;
 }
 
+interface StoreLocation {
+  id: string;
+  code: string;
+  zone: string;
+  aisle: string;
+  shelf: string;
+  bin: string;
+  description: string;
+  active: boolean;
+  assignedProducts: number;
+}
+
+interface ProductPlacement {
+  id: string;
+  productId: string;
+  productName: string;
+  barcode: string;
+  locationId: string;
+  locationCode: string;
+  zone: string;
+  facingCount: number;
+  capacity: number;
+  reorderPoint: number;
+  stock: number;
+  needsRestock: boolean;
+}
+
+interface LabelJobLine {
+  id: string;
+  productId: string;
+  productName: string;
+  barcode: string;
+  price: number;
+  promo: SupermarketProduct['promo'];
+  locationCode: string;
+  copies: number;
+}
+
+interface LabelJob {
+  id: string;
+  labelSize: 'shelf_60x30' | 'promo_80x40';
+  status: 'pending' | 'printed';
+  itemCount: number;
+  createdAt: string;
+  printedAt: string | null;
+  lines: LabelJobLine[];
+}
+
 const INITIAL_PRODUCTS = SUPERMARKET_PRODUCTS.map((product) => ({ ...product, imageUrl: null, active: true }));
 const EMPTY_PRODUCT: SupermarketProduct = {
   id: '', name: '', price: 0, cost: 0, barcode: '', isWeighed: false, unit: 'unit', category: 'almacen',
@@ -117,6 +168,9 @@ export default function SupermarketWorkspaceConsole() {
   const [currentBranchId, setCurrentBranchId] = useState<string | null>(null);
   const [inventoryEvents, setInventoryEvents] = useState<InventoryEvent[]>([]);
   const [transfers, setTransfers] = useState<Transfer[]>([]);
+  const [locations, setLocations] = useState<StoreLocation[]>([]);
+  const [placements, setPlacements] = useState<ProductPlacement[]>([]);
+  const [labelJobs, setLabelJobs] = useState<LabelJob[]>([]);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<ProductFilter>('all');
   const [editingProduct, setEditingProduct] = useState<SupermarketProduct | null>(null);
@@ -131,7 +185,7 @@ export default function SupermarketWorkspaceConsole() {
   useEffect(() => {
     const sync = () => {
       const hash = window.location.hash.slice(1) as Area;
-      if (['pos', 'catalog', 'inventory', 'purchases', 'lots', 'operations'].includes(hash)) setArea(hash);
+      if (['pos', 'catalog', 'inventory', 'purchases', 'lots', 'operations', 'layout'].includes(hash)) setArea(hash);
     };
     sync();
     window.addEventListener('hashchange', sync);
@@ -149,8 +203,11 @@ export default function SupermarketWorkspaceConsole() {
       apiFetch<{ items: Branch[]; currentBranchId: string | null }>('/api/rubros/supermarket/branches'),
       apiFetch<{ items: InventoryEvent[] }>('/api/rubros/supermarket/inventory-events'),
       apiFetch<{ items: Transfer[] }>('/api/rubros/supermarket/transfers'),
+      apiFetch<{ items: StoreLocation[] }>('/api/rubros/supermarket/locations'),
+      apiFetch<{ items: ProductPlacement[] }>('/api/rubros/supermarket/placements'),
+      apiFetch<{ items: LabelJob[] }>('/api/rubros/supermarket/labels'),
     ])
-      .then(([catalogResponse, purchasesResponse, lotsResponse, cashResponse, branchesResponse, eventsResponse, transfersResponse]) => {
+      .then(([catalogResponse, purchasesResponse, lotsResponse, cashResponse, branchesResponse, eventsResponse, transfersResponse, locationsResponse, placementsResponse, labelsResponse]) => {
         if (!active) return;
         setProducts(catalogResponse.items);
         setPurchases(purchasesResponse.items);
@@ -160,6 +217,9 @@ export default function SupermarketWorkspaceConsole() {
         setCurrentBranchId(branchesResponse.currentBranchId);
         setInventoryEvents(eventsResponse.items);
         setTransfers(transfersResponse.items);
+        setLocations(locationsResponse.items);
+        setPlacements(placementsResponse.items);
+        setLabelJobs(labelsResponse.items);
       })
       .catch((error: unknown) => {
         if (active) setFeedback(error instanceof Error ? error.message : 'No se pudieron sincronizar los datos del supermercado.');
@@ -329,6 +389,44 @@ export default function SupermarketWorkspaceConsole() {
     showFeedback(`${response.result.updatedCount} precios actualizados.`);
   };
 
+  const refreshLayout = async () => {
+    const [locationsResponse, placementsResponse, labelsResponse] = await Promise.all([
+      apiFetch<{ items: StoreLocation[] }>('/api/rubros/supermarket/locations'),
+      apiFetch<{ items: ProductPlacement[] }>('/api/rubros/supermarket/placements'),
+      apiFetch<{ items: LabelJob[] }>('/api/rubros/supermarket/labels'),
+    ]);
+    setLocations(locationsResponse.items);
+    setPlacements(placementsResponse.items);
+    setLabelJobs(labelsResponse.items);
+  };
+
+  const saveLocation = async (input: Omit<StoreLocation, 'assignedProducts'>) => {
+    await apiFetch('/api/rubros/supermarket/locations', { method: 'POST', body: JSON.stringify(input) });
+    await refreshLayout();
+    showFeedback(input.id ? 'Ubicacion actualizada.' : 'Ubicacion creada.');
+  };
+
+  const savePlacement = async (input: { productId: string; locationId: string; facingCount: number; capacity: number; reorderPoint: number }) => {
+    await apiFetch('/api/rubros/supermarket/placements', { method: 'POST', body: JSON.stringify(input) });
+    await refreshLayout();
+    showFeedback('Producto asignado a la gondola.');
+  };
+
+  const createLabelJob = async (input: { labelSize: LabelJob['labelSize']; items: Array<{ productId: string; copies: number }> }) => {
+    const response = await apiFetch<{ item: LabelJob }>('/api/rubros/supermarket/labels', {
+      method: 'POST', headers: { 'Idempotency-Key': `supermarket-labels:${crypto.randomUUID()}` }, body: JSON.stringify(input),
+    });
+    setLabelJobs((current) => [response.item, ...current.filter((job) => job.id !== response.item.id)]);
+    showFeedback(`${response.item.itemCount} etiquetas preparadas.`);
+    return response.item;
+  };
+
+  const markLabelJobPrinted = async (jobId: string) => {
+    await apiFetch('/api/rubros/supermarket/labels', { method: 'PATCH', body: JSON.stringify({ jobId }) });
+    await refreshLayout();
+    showFeedback('Impresion registrada en el historial.');
+  };
+
   const savePurchase = async () => {
     if (!editingPurchase?.supplier.trim() || !editingPurchase.productId || editingPurchase.quantity <= 0) return;
     const isNew = !editingPurchase.id;
@@ -398,6 +496,7 @@ export default function SupermarketWorkspaceConsole() {
     { id: 'purchases', label: 'Compras', icon: Truck },
     { id: 'lots', label: 'Lotes y vencimientos', icon: CalendarClock },
     { id: 'operations', label: 'Control operativo', icon: ClipboardCheck },
+    { id: 'layout', label: 'Gondolas y etiquetas', icon: LayoutGrid },
   ];
 
   return (
@@ -457,6 +556,18 @@ export default function SupermarketWorkspaceConsole() {
         onBulkPrices={applyBulkPrices}
       />}
 
+      {area === 'layout' && <StoreLayoutConsole
+        products={products}
+        locations={locations}
+        placements={placements}
+        labelJobs={labelJobs}
+        busy={syncing}
+        onSaveLocation={saveLocation}
+        onSavePlacement={savePlacement}
+        onCreateLabels={createLabelJob}
+        onMarkPrinted={markLabelJobPrinted}
+      />}
+
       {editingProduct && <ProductEditor product={editingProduct} setProduct={setEditingProduct} onImage={uploadImage} onSave={saveProduct} onClose={() => setEditingProduct(null)} />}
       {editingPurchase && <PurchaseEditor purchase={editingPurchase} setPurchase={setEditingPurchase} products={products} onSave={savePurchase} onClose={() => setEditingPurchase(null)} />}
     </div>
@@ -467,6 +578,154 @@ const inputClass = 'h-10 w-full rounded-md border border-slate-300 bg-white px-3
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return <label className="mb-3 block"><span className="mb-1.5 block text-xs font-bold text-slate-600">{label}</span>{children}</label>;
+}
+
+function StoreLayoutConsole({
+  products, locations, placements, labelJobs, busy,
+  onSaveLocation, onSavePlacement, onCreateLabels, onMarkPrinted,
+}: {
+  products: SupermarketProduct[];
+  locations: StoreLocation[];
+  placements: ProductPlacement[];
+  labelJobs: LabelJob[];
+  busy: boolean;
+  onSaveLocation: (input: Omit<StoreLocation, 'assignedProducts'>) => Promise<void>;
+  onSavePlacement: (input: { productId: string; locationId: string; facingCount: number; capacity: number; reorderPoint: number }) => Promise<void>;
+  onCreateLabels: (input: { labelSize: LabelJob['labelSize']; items: Array<{ productId: string; copies: number }> }) => Promise<LabelJob>;
+  onMarkPrinted: (jobId: string) => Promise<void>;
+}) {
+  const emptyLocation = { id: '', code: '', zone: '', aisle: '', shelf: '', bin: '', description: '', active: true };
+  const [locationDraft, setLocationDraft] = useState<Omit<StoreLocation, 'assignedProducts'>>(emptyLocation);
+  const [productId, setProductId] = useState('');
+  const [locationId, setLocationId] = useState('');
+  const [facingCount, setFacingCount] = useState(1);
+  const [capacity, setCapacity] = useState(12);
+  const [reorderPoint, setReorderPoint] = useState(4);
+  const [selectedProducts, setSelectedProducts] = useState<string[]>([]);
+  const [copies, setCopies] = useState(1);
+  const [labelSize, setLabelSize] = useState<LabelJob['labelSize']>('shelf_60x30');
+  const [previewJob, setPreviewJob] = useState<LabelJob | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+  const activeLocations = locations.filter((location) => location.active);
+  const unassignedCount = products.filter((product) => !placements.some((placement) => placement.productId === product.id)).length;
+  const restockCount = placements.filter((placement) => placement.needsRestock).length;
+
+  const execute = async (action: () => Promise<void>) => {
+    setSubmitting(true);
+    setError('');
+    try { await action(); } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'No se pudo completar la operacion.');
+    } finally { setSubmitting(false); }
+  };
+
+  const submitLocation = (event: FormEvent) => {
+    event.preventDefault();
+    if (!locationDraft.code.trim() || !locationDraft.zone.trim()) return;
+    void execute(async () => {
+      await onSaveLocation(locationDraft);
+      setLocationDraft(emptyLocation);
+    });
+  };
+
+  const editPlacement = (placement: ProductPlacement) => {
+    setProductId(placement.productId);
+    setLocationId(placement.locationId);
+    setFacingCount(placement.facingCount);
+    setCapacity(placement.capacity);
+    setReorderPoint(placement.reorderPoint);
+  };
+
+  const submitPlacement = (event: FormEvent) => {
+    event.preventDefault();
+    if (!productId || !locationId || reorderPoint > capacity) return;
+    void execute(async () => {
+      await onSavePlacement({ productId, locationId, facingCount, capacity, reorderPoint });
+      setProductId('');
+    });
+  };
+
+  const toggleSelected = (id: string) => setSelectedProducts((current) => current.includes(id)
+    ? current.filter((item) => item !== id)
+    : [...current, id]);
+
+  const submitLabels = () => {
+    if (selectedProducts.length === 0) return;
+    void execute(async () => {
+      const job = await onCreateLabels({ labelSize, items: selectedProducts.map((id) => ({ productId: id, copies })) });
+      setPreviewJob(job);
+      setSelectedProducts([]);
+    });
+  };
+
+  return (
+    <section className="space-y-6" aria-label="Gondolas y etiquetas de supermercado">
+      <SectionHeader title="Gondolas y etiquetas" detail="Mapa comercial, capacidad de exhibicion, reposicion y precios listos para imprimir." />
+      {error && <div role="alert" className="rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">{error}</div>}
+
+      <div className="grid gap-3 sm:grid-cols-3">
+        <Metric label="Ubicaciones activas" value={String(activeLocations.length)} detail={`${locations.length} configuradas`} />
+        <Metric label="Sin ubicacion" value={String(unassignedCount)} detail="Productos por organizar" warning={unassignedCount > 0} />
+        <Metric label="Reposicion de gondola" value={String(restockCount)} detail="Bajo el punto definido" warning={restockCount > 0} />
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+        <form onSubmit={submitLocation} className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="mb-4 flex items-center justify-between gap-3"><div className="flex items-center gap-2"><MapPin className="h-5 w-5 text-emerald-600" /><h3 className="font-bold text-slate-900">{locationDraft.id ? 'Editar ubicacion' : 'Nueva ubicacion'}</h3></div>{locationDraft.id && <button type="button" onClick={() => setLocationDraft(emptyLocation)} className="text-xs font-bold text-slate-500">Cancelar edicion</button>}</div>
+          <div className="grid gap-x-3 sm:grid-cols-2">
+            <Field label="Codigo interno"><input required value={locationDraft.code} onChange={(event) => setLocationDraft({ ...locationDraft, code: event.target.value })} placeholder="A1-G2-E3" maxLength={40} className={inputClass} /></Field>
+            <Field label="Zona"><input required value={locationDraft.zone} onChange={(event) => setLocationDraft({ ...locationDraft, zone: event.target.value })} placeholder="Almacen" maxLength={80} className={inputClass} /></Field>
+            <Field label="Pasillo"><input value={locationDraft.aisle} onChange={(event) => setLocationDraft({ ...locationDraft, aisle: event.target.value })} maxLength={40} className={inputClass} /></Field>
+            <Field label="Estante"><input value={locationDraft.shelf} onChange={(event) => setLocationDraft({ ...locationDraft, shelf: event.target.value })} maxLength={40} className={inputClass} /></Field>
+            <Field label="Contenedor"><input value={locationDraft.bin} onChange={(event) => setLocationDraft({ ...locationDraft, bin: event.target.value })} maxLength={40} className={inputClass} /></Field>
+            <Field label="Estado"><span className="flex h-10 items-center justify-between rounded-md border border-slate-300 px-3 text-sm font-semibold">Ubicacion activa<input type="checkbox" checked={locationDraft.active} onChange={(event) => setLocationDraft({ ...locationDraft, active: event.target.checked })} className="h-4 w-4 accent-emerald-600" /></span></Field>
+          </div>
+          <Field label="Descripcion"><input value={locationDraft.description} onChange={(event) => setLocationDraft({ ...locationDraft, description: event.target.value })} placeholder="Referencia para el equipo de reposicion" maxLength={200} className={inputClass} /></Field>
+          <button disabled={busy || submitting} className="flex h-10 w-full items-center justify-center gap-2 rounded-md bg-emerald-600 text-sm font-bold text-white disabled:opacity-50"><MapPin className="h-4 w-4" />Guardar ubicacion</button>
+        </form>
+
+        <form onSubmit={submitPlacement} className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="mb-4 flex items-center gap-2"><LayoutGrid className="h-5 w-5 text-cyan-600" /><h3 className="font-bold text-slate-900">Asignar producto</h3></div>
+          <Field label="Producto"><select required value={productId} onChange={(event) => { const next = event.target.value; const product = products.find((item) => item.id === next); const existing = placements.find((item) => item.productId === next); setProductId(next); if (existing) editPlacement(existing); else { setCapacity(Math.max(product?.minStock ?? 0, 1) * 2); setReorderPoint(product?.minStock ?? 0); } }} className={inputClass}><option value="">Seleccionar producto</option>{products.filter((product) => product.active !== false).map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}</select></Field>
+          <Field label="Ubicacion"><select required value={locationId} onChange={(event) => setLocationId(event.target.value)} className={inputClass}><option value="">Seleccionar gondola</option>{activeLocations.map((location) => <option key={location.id} value={location.id}>{location.code} - {location.zone}</option>)}</select></Field>
+          <div className="grid grid-cols-3 gap-3">
+            <Field label="Frentes"><input required type="number" min="0" step="1" value={facingCount} onChange={(event) => setFacingCount(Number(event.target.value))} className={inputClass} /></Field>
+            <Field label="Capacidad"><input required type="number" min="0" step="0.001" value={capacity} onChange={(event) => setCapacity(Number(event.target.value))} className={inputClass} /></Field>
+            <Field label="Reponer en"><input required type="number" min="0" max={capacity} step="0.001" value={reorderPoint} onChange={(event) => setReorderPoint(Number(event.target.value))} className={inputClass} /></Field>
+          </div>
+          {reorderPoint > capacity && <p className="mb-3 text-xs font-semibold text-rose-600">El punto de reposicion no puede superar la capacidad.</p>}
+          <button disabled={busy || submitting || !productId || !locationId || reorderPoint > capacity} className="flex h-10 w-full items-center justify-center gap-2 rounded-md bg-cyan-600 text-sm font-bold text-white disabled:opacity-50"><LayoutGrid className="h-4 w-4" />Guardar asignacion</button>
+        </form>
+      </div>
+
+      <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+        <div className="flex flex-col justify-between gap-3 border-b border-slate-200 px-4 py-3 sm:flex-row sm:items-center"><div><h3 className="font-bold text-slate-900">Mapa de productos</h3><p className="text-xs text-slate-500">Selecciona referencias para generar etiquetas con el precio actual.</p></div><button type="button" onClick={() => setSelectedProducts(selectedProducts.length === placements.length ? [] : placements.map((item) => item.productId))} className="h-9 rounded-md border border-slate-300 px-3 text-xs font-bold text-slate-700">{selectedProducts.length === placements.length && placements.length > 0 ? 'Quitar seleccion' : 'Seleccionar todos'}</button></div>
+        <div className="overflow-x-auto"><table className="w-full min-w-[900px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="w-12 px-4 py-3">Etiq.</th><th className="px-4 py-3">Producto</th><th className="px-4 py-3">Ubicacion</th><th className="px-4 py-3">Frentes</th><th className="px-4 py-3">Stock / capacidad</th><th className="px-4 py-3">Reposicion</th><th className="px-4 py-3"></th></tr></thead><tbody className="divide-y divide-slate-100">{placements.map((placement) => { const fill = placement.capacity > 0 ? Math.min(100, (placement.stock / placement.capacity) * 100) : 0; return <tr key={placement.id} className={placement.needsRestock ? 'bg-amber-50/60' : ''}><td className="px-4 py-3"><input type="checkbox" checked={selectedProducts.includes(placement.productId)} onChange={() => toggleSelected(placement.productId)} aria-label={`Seleccionar etiqueta de ${placement.productName}`} className="h-4 w-4 accent-emerald-600" /></td><td className="px-4 py-3"><p className="font-bold text-slate-900">{placement.productName}</p><p className="text-xs text-slate-500">EAN {placement.barcode}</p></td><td className="px-4 py-3"><p className="font-mono text-xs font-bold text-slate-800">{placement.locationCode}</p><p className="text-xs text-slate-500">{placement.zone}</p></td><td className="px-4 py-3 font-semibold">{placement.facingCount}</td><td className="px-4 py-3"><p className="font-semibold">{placement.stock} / {placement.capacity}</p><div className="mt-1 h-1.5 w-28 overflow-hidden rounded bg-slate-100"><div className={`h-full ${placement.needsRestock ? 'bg-amber-500' : 'bg-emerald-500'}`} style={{ width: `${fill}%` }} /></div></td><td className="px-4 py-3">{placement.needsRestock ? <span className="inline-flex items-center gap-1 font-bold text-amber-700"><AlertTriangle className="h-4 w-4" />Reponer</span> : <span className="font-semibold text-emerald-700">Cubierta</span>}</td><td className="px-4 py-3 text-right"><button type="button" onClick={() => editPlacement(placement)} aria-label={`Editar ubicacion de ${placement.productName}`} className="rounded-md border border-slate-200 p-2 text-slate-600"><Pencil className="h-4 w-4" /></button></td></tr>; })}{placements.length === 0 && <tr><td colSpan={7} className="px-4 py-8 text-center text-slate-500">Asigna productos para construir el mapa de la sucursal.</td></tr>}</tbody></table></div>
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-[380px_minmax(0,1fr)]">
+        <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="mb-4 flex items-center gap-2"><Printer className="h-5 w-5 text-indigo-600" /><h3 className="font-bold text-slate-900">Preparar etiquetas</h3></div>
+          <Field label="Formato"><select value={labelSize} onChange={(event) => setLabelSize(event.target.value as LabelJob['labelSize'])} className={inputClass}><option value="shelf_60x30">Gondola 60 x 30 mm</option><option value="promo_80x40">Promocion 80 x 40 mm</option></select></Field>
+          <Field label="Copias por producto"><input type="number" min="1" max="100" step="1" value={copies} onChange={(event) => setCopies(Math.min(100, Math.max(1, Number(event.target.value))))} className={inputClass} /></Field>
+          <div className="mb-4 border-y border-slate-100 py-3 text-sm"><div className="flex justify-between"><span className="text-slate-500">Productos</span><strong>{selectedProducts.length}</strong></div><div className="mt-1 flex justify-between"><span className="text-slate-500">Etiquetas</span><strong>{selectedProducts.length * copies}</strong></div></div>
+          <button type="button" onClick={submitLabels} disabled={busy || submitting || selectedProducts.length === 0} className="flex h-10 w-full items-center justify-center gap-2 rounded-md bg-indigo-600 text-sm font-bold text-white disabled:opacity-50"><Printer className="h-4 w-4" />Generar trabajo</button>
+        </div>
+
+        <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+          <div className="border-b border-slate-200 px-4 py-3"><h3 className="font-bold text-slate-900">Historial de etiquetas</h3></div>
+          <div className="divide-y divide-slate-100">{labelJobs.slice(0, 10).map((job) => <div key={job.id} className="flex flex-col justify-between gap-3 px-4 py-3 sm:flex-row sm:items-center"><div><div className="flex items-center gap-2"><span className={`rounded-full px-2 py-1 text-xs font-bold ${job.status === 'printed' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>{job.status === 'printed' ? 'Impreso' : 'Pendiente'}</span><strong className="text-sm text-slate-900">{job.itemCount} etiquetas</strong></div><p className="mt-1 text-xs text-slate-500">{job.labelSize === 'shelf_60x30' ? '60 x 30 mm' : '80 x 40 mm'} - {new Date(job.createdAt).toLocaleString('es-AR')}</p></div><button type="button" onClick={() => setPreviewJob(job)} className="flex h-9 items-center justify-center gap-2 rounded-md border border-slate-300 px-3 text-xs font-bold text-slate-700"><Printer className="h-4 w-4" />{job.status === 'printed' ? 'Ver etiquetas' : 'Revisar e imprimir'}</button></div>)}{labelJobs.length === 0 && <p className="px-4 py-8 text-center text-sm text-slate-500">Todavia no hay trabajos de impresion.</p>}</div>
+        </div>
+      </div>
+
+      {previewJob && <LabelPrintPreview job={previewJob} busy={busy || submitting} onClose={() => setPreviewJob(null)} onPrinted={() => execute(async () => { window.print(); await onMarkPrinted(previewJob.id); setPreviewJob((current) => current ? { ...current, status: 'printed', printedAt: new Date().toISOString() } : current); })} />}
+    </section>
+  );
+}
+
+function LabelPrintPreview({ job, busy, onClose, onPrinted }: { job: LabelJob; busy: boolean; onClose: () => void; onPrinted: () => void }) {
+  const labels = job.lines.flatMap((line) => Array.from({ length: line.copies }, (_, index) => ({ ...line, copy: index + 1 })));
+  return <Modal title="Vista previa de etiquetas" onClose={onClose} footer={<><button onClick={onClose} className="h-9 rounded-md border border-slate-300 px-4 text-sm font-bold">Cerrar</button>{job.status === 'pending' && <button onClick={onPrinted} disabled={busy} className="flex h-9 items-center gap-2 rounded-md bg-indigo-600 px-4 text-sm font-bold text-white disabled:opacity-50"><Printer className="h-4 w-4" />Imprimir y confirmar</button>}</>}><style>{'@media print { body * { visibility: hidden !important; } [data-label-sheet], [data-label-sheet] * { visibility: visible !important; } [data-label-sheet] { position: absolute; inset: 0; width: 100%; background: white; padding: 8mm; } }'}</style><div data-label-sheet className={`grid gap-3 ${job.labelSize === 'promo_80x40' ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-2 sm:grid-cols-3'}`}>{labels.map((line) => <article key={`${line.id}-${line.copy}`} className={`flex flex-col justify-between border-2 border-slate-900 bg-white p-3 text-slate-950 ${job.labelSize === 'promo_80x40' ? 'min-h-40' : 'min-h-32'}`}><div><div className="flex items-start justify-between gap-2"><strong className="text-sm leading-tight">{line.productName}</strong><span className="font-mono text-[10px]">{line.locationCode}</span></div>{line.promo !== 'none' && <p className="mt-1 text-xs font-black uppercase text-rose-700">Promo {line.promo === '30off' ? '30% OFF' : '2 x 1'}</p>}</div><div className="mt-2"><p className="text-right text-3xl font-black">{money(line.price)}</p><div className="mt-2 flex items-end justify-between gap-2"><Barcode className="h-6 flex-1" /><span className="font-mono text-[9px]">{line.barcode}</span></div></div></article>)}</div></Modal>;
 }
 
 function InventoryOperations({

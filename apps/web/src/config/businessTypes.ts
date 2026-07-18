@@ -217,6 +217,7 @@ export const BUSINESS_MODULES: Record<BusinessTypeCode, BusinessModuleDefinition
     { label: 'Compras a proveedores', path: '/rubros/supermarket#purchases', desc: 'Órdenes y recepción de mercadería', icon: 'RefreshCw', badge: 'Nuevo' },
     { label: 'Lotes y vencimientos', path: '/rubros/supermarket#lots', desc: 'Trazabilidad FEFO y alertas de merma', icon: 'Clock', badge: 'Nuevo' },
     { label: 'Control operativo', path: '/rubros/supermarket#operations', desc: 'Conteos, mermas, transferencias y precios masivos', icon: 'Layers', badge: 'Nuevo' },
+    { label: 'Góndolas y etiquetas', path: '/rubros/supermarket#layout', desc: 'Ubicaciones, capacidad, reposición e impresión de precios', icon: 'Grid', badge: 'Nuevo' },
     { label: 'Fidelización Clientes', path: '/contacts', desc: 'Control de puntos y descuentos', icon: 'Users' },
     { label: 'Facturación ARCA', path: '/billing', desc: 'Ticket fiscal con CAE', icon: 'CreditCard' },
   ],
@@ -319,6 +320,7 @@ export const BUSINESS_NAVIGATION: Record<BusinessTypeCode, BusinessNavigationIte
     { label: 'Stock', path: '/rubros/supermarket#inventory', icon: 'Grid' },
     { label: 'Lotes', path: '/rubros/supermarket#lots', icon: 'Clock' },
     { label: 'Control', path: '/rubros/supermarket#operations', icon: 'Layers' },
+    { label: 'Góndolas', path: '/rubros/supermarket#layout', icon: 'Grid' },
   ],
   hardware_store: [
     { label: 'Resumen', path: '/rubros/hardware_store', icon: 'LayoutDashboard' },

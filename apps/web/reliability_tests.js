@@ -384,6 +384,41 @@ test('supermercado controla conteos, mermas, transferencias y precios masivos', 
   assert.match(config, /supermarket#operations/);
 });
 
+test('supermercado organiza gondolas y congela etiquetas auditables', () => {
+  const migration = fs.readFileSync(
+    path.join(__dirname, '../../packages/database/supabase/migrations/20260718000026_supermarket_layout_and_labels.sql'),
+    'utf8',
+  );
+  const workspace = fs.readFileSync(path.join(__dirname, 'src/components/supermarket/SupermarketWorkspaceConsole.tsx'), 'utf8');
+  const config = fs.readFileSync(path.join(__dirname, 'src/config/businessTypes.ts'), 'utf8');
+  const repository = fs.readFileSync(path.join(__dirname, 'src/lib/api/supermarketRepository.ts'), 'utf8');
+  const locationsRoute = fs.readFileSync(path.join(__dirname, 'src/app/api/rubros/supermarket/locations/route.ts'), 'utf8');
+  const placementsRoute = fs.readFileSync(path.join(__dirname, 'src/app/api/rubros/supermarket/placements/route.ts'), 'utf8');
+  const labelsRoute = fs.readFileSync(path.join(__dirname, 'src/app/api/rubros/supermarket/labels/route.ts'), 'utf8');
+
+  ['supermarket_store_locations', 'supermarket_product_locations', 'supermarket_label_jobs', 'supermarket_label_job_lines'].forEach((table) => {
+    assert.match(migration, new RegExp(`CREATE TABLE IF NOT EXISTS public\\.${table}`));
+  });
+  ['supermarket_list_locations', 'supermarket_save_location', 'supermarket_list_placements', 'supermarket_save_placement', 'supermarket_list_label_jobs', 'supermarket_create_label_job', 'supermarket_mark_label_job_printed'].forEach((fn) => {
+    assert.match(migration, new RegExp(`FUNCTION public\\.${fn}`));
+    assert.match(repository, new RegExp(`'${fn}'`));
+  });
+  assert.match(migration, /public\.jwt_business_type\(\) = 'supermarket'/);
+  assert.match(migration, /jsonb_array_length\(p_items\) > 500/);
+  assert.match(migration, /v_product\.price, v_supermarket\.promo/);
+  assert.match(migration, /pg_advisory_xact_lock/);
+  assert.match(locationsRoute, /supermarket\.layout\.write/);
+  assert.match(placementsRoute, /supermarket\.layout\.write/);
+  assert.match(labelsRoute, /supermarket\.labels\.create/);
+  assert.match(labelsRoute, /supermarket\.labels\.print/);
+  [locationsRoute, placementsRoute, labelsRoute].forEach((route) => {
+    assert.ok(route.indexOf('authorizeRequest(request') < route.indexOf('readJsonObject(request)'));
+  });
+  assert.match(workspace, /Gondolas y etiquetas/);
+  assert.match(workspace, /data-label-sheet/);
+  assert.match(config, /supermarket#layout/);
+});
+
 test('supermercado persiste catalogo, compras y lotes con recepcion atomica', () => {
   const migration = fs.readFileSync(
     path.join(__dirname, '../../packages/database/supabase/migrations/20260718000023_supermarket_domain.sql'),

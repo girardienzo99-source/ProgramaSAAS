@@ -140,7 +140,7 @@ export default function AppShell({
             </span>
           </Link>
 
-          <nav className="hidden min-w-0 flex-1 items-center justify-center gap-1 lg:flex" aria-label="Navegación principal">
+          <nav className="scrollbar-none hidden min-w-0 flex-1 items-center justify-start gap-1 overflow-x-auto lg:flex" aria-label="Navegación principal">
             {primaryNavigation.map((item) => {
               const Icon = item.icon;
               const active = pathname === item.href;
@@ -149,7 +149,7 @@ export default function AppShell({
                   key={item.href}
                   href={getIsolatedHref(businessTypeCode, item.href)}
                   aria-current={active ? 'page' : undefined}
-                  className={`flex h-9 items-center gap-1.5 rounded-md px-3 text-xs font-semibold transition-colors ${
+                  className={`flex h-9 shrink-0 items-center gap-1.5 rounded-md px-3 text-xs font-semibold transition-colors ${
                     active ? 'bg-blue-50 text-blue-700' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
                   }`}
                 >

@@ -492,9 +492,52 @@ test('supermercado calcula rentabilidad historica y consolida sucursales', () =>
   assert.match(config, /supermarket#reports/);
 });
 
+test('supermercado pronostica demanda y concilia cuentas de proveedores', () => {
+  const migration = fs.readFileSync(
+    path.join(__dirname, '../../packages/database/supabase/migrations/20260718000029_supermarket_supply_planning.sql'),
+    'utf8',
+  );
+  const workspace = fs.readFileSync(path.join(__dirname, 'src/components/supermarket/SupermarketWorkspaceConsole.tsx'), 'utf8');
+  const supply = fs.readFileSync(path.join(__dirname, 'src/components/supermarket/SupermarketSupplyConsole.tsx'), 'utf8');
+  const config = fs.readFileSync(path.join(__dirname, 'src/config/businessTypes.ts'), 'utf8');
+  const repository = fs.readFileSync(path.join(__dirname, 'src/lib/api/supermarketSupplyRepository.ts'), 'utf8');
+  const suppliersRoute = fs.readFileSync(path.join(__dirname, 'src/app/api/rubros/supermarket/suppliers/route.ts'), 'utf8');
+  const documentsRoute = fs.readFileSync(path.join(__dirname, 'src/app/api/rubros/supermarket/supplier-documents/route.ts'), 'utf8');
+  const supplyRoute = fs.readFileSync(path.join(__dirname, 'src/app/api/rubros/supermarket/supply/route.ts'), 'utf8');
+
+  ['supermarket_suppliers', 'supermarket_supplier_documents'].forEach((table) => {
+    assert.match(migration, new RegExp(`CREATE TABLE IF NOT EXISTS public\\.${table}`));
+  });
+  ['supermarket_list_suppliers', 'supermarket_save_supplier', 'supermarket_list_supplier_documents', 'supermarket_post_supplier_document', 'supermarket_supply_forecast'].forEach((fn) => {
+    assert.match(migration, new RegExp(`FUNCTION public\\.${fn}`));
+    assert.match(repository, new RegExp(`'${fn}'`));
+  });
+  assert.match(migration, /public\.jwt_business_type\(\) = 'supermarket'/g);
+  assert.match(migration, /pg_advisory_xact_lock/);
+  assert.match(migration, /UNIQUE\(company_id, idempotency_key\)/);
+  assert.match(migration, /JOIN public\.sale_items/);
+  assert.match(migration, /o\.status = 'ordered'/);
+  assert.match(migration, /suggested_quantity/);
+  assert.match(migration, /reconciliation_status/);
+  assert.match(suppliersRoute, /supermarket\.suppliers\.write/);
+  assert.ok(suppliersRoute.indexOf('authorizeRequest(request') < suppliersRoute.indexOf('readJsonObject(request)'));
+  assert.match(documentsRoute, /supermarket\.supplier_accounts\.write/);
+  assert.match(documentsRoute, /requiredIdempotencyKey/);
+  assert.ok(documentsRoute.indexOf('authorizeRequest(request') < documentsRoute.indexOf('readJsonObject(request)'));
+  assert.match(supplyRoute, /supermarket\.supply\.forecast/);
+  assert.match(workspace, /SupermarketSupplyConsole/);
+  assert.match(supply, /Abastecimiento inteligente/);
+  assert.match(supply, /Crear orden/);
+  assert.match(config, /supermarket#supply/);
+});
+
 test('supermercado persiste catalogo, compras y lotes con recepcion atomica', () => {
   const migration = fs.readFileSync(
     path.join(__dirname, '../../packages/database/supabase/migrations/20260718000023_supermarket_domain.sql'),
+    'utf8',
+  );
+  const receiptFix = fs.readFileSync(
+    path.join(__dirname, '../../packages/database/supabase/migrations/20260718000030_supermarket_receive_first_stock_fix.sql'),
     'utf8',
   );
   const catalogRoute = fs.readFileSync(path.join(__dirname, 'src/app/api/rubros/supermarket/catalog/route.ts'), 'utf8');
@@ -512,6 +555,8 @@ test('supermercado persiste catalogo, compras y lotes con recepcion atomica', ()
   assert.match(migration, /FOR UPDATE/g);
   assert.match(migration, /supermarket_purchase_receipt/);
   assert.match(migration, /quantity_remaining/);
+  assert.match(receiptFix, /v_current_stock := COALESCE\(v_current_stock, 0\)/);
+  assert.match(receiptFix, /v_current_cost := COALESCE\(v_current_cost, 0\)/);
   assert.match(catalogRoute, /authorizeRequest\(request, 'supermarket\.catalog\.read', 'supermarket'\)/);
   assert.match(purchasesRoute, /supermarket\.purchases\.receive/);
   assert.match(lotsRoute, /supermarket\.inventory\.read/);

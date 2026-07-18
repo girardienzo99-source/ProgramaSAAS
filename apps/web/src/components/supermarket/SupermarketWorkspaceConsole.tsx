@@ -15,6 +15,7 @@ import {
   LayoutGrid,
   MapPin,
   PackageCheck,
+  PackageSearch,
   Pencil,
   Plus,
   Percent,
@@ -33,8 +34,9 @@ import SupermarketConsole, {
 } from './SupermarketConsole';
 import SupermarketLoyaltyConsole from './SupermarketLoyaltyConsole';
 import SupermarketReportsConsole from './SupermarketReportsConsole';
+import SupermarketSupplyConsole from './SupermarketSupplyConsole';
 
-type Area = 'pos' | 'catalog' | 'inventory' | 'purchases' | 'lots' | 'operations' | 'layout' | 'loyalty' | 'reports';
+type Area = 'pos' | 'catalog' | 'inventory' | 'purchases' | 'lots' | 'operations' | 'layout' | 'loyalty' | 'reports' | 'supply';
 type ProductFilter = 'all' | 'active' | 'paused' | 'low' | 'expiring';
 type PurchaseStatus = 'draft' | 'ordered' | 'received';
 
@@ -189,7 +191,7 @@ export default function SupermarketWorkspaceConsole() {
   useEffect(() => {
     const sync = () => {
       const hash = window.location.hash.slice(1) as Area;
-      if (['pos', 'catalog', 'inventory', 'purchases', 'lots', 'operations', 'layout', 'loyalty', 'reports'].includes(hash)) setArea(hash);
+      if (['pos', 'catalog', 'inventory', 'purchases', 'lots', 'operations', 'layout', 'loyalty', 'reports', 'supply'].includes(hash)) setArea(hash);
     };
     sync();
     window.addEventListener('hashchange', sync);
@@ -451,6 +453,13 @@ export default function SupermarketWorkspaceConsole() {
     }
   };
 
+  const createSuggestedPurchase = async (input: Omit<Purchase, 'id'>) => {
+    const response = await apiFetch<{ item: Purchase }>('/api/rubros/supermarket/purchases', {
+      method: 'POST', body: JSON.stringify(input),
+    });
+    setPurchases((current) => [response.item, ...current.filter((item) => item.id !== response.item.id)]);
+  };
+
   const receivePurchase = async (purchase: Purchase) => {
     if (purchase.status === 'received') return;
     setSyncing(true);
@@ -503,6 +512,7 @@ export default function SupermarketWorkspaceConsole() {
     { id: 'layout', label: 'Gondolas', icon: LayoutGrid },
     { id: 'loyalty', label: 'Fidelizacion', icon: Gift },
     { id: 'reports', label: 'Reportes', icon: BarChart3 },
+    { id: 'supply', label: 'Abastecimiento', icon: PackageSearch },
   ];
 
   return (
@@ -577,6 +587,8 @@ export default function SupermarketWorkspaceConsole() {
       {area === 'loyalty' && <SupermarketLoyaltyConsole />}
 
       {area === 'reports' && <SupermarketReportsConsole branches={branches} />}
+
+      {area === 'supply' && <SupermarketSupplyConsole products={products} purchases={purchases} onCreatePurchase={createSuggestedPurchase} />}
 
       {editingProduct && <ProductEditor product={editingProduct} setProduct={setEditingProduct} onImage={uploadImage} onSave={saveProduct} onClose={() => setEditingProduct(null)} />}
       {editingPurchase && <PurchaseEditor purchase={editingPurchase} setPurchase={setEditingPurchase} products={products} onSave={savePurchase} onClose={() => setEditingPurchase(null)} />}

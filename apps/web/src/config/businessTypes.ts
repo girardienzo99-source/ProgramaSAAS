@@ -220,6 +220,7 @@ export const BUSINESS_MODULES: Record<BusinessTypeCode, BusinessModuleDefinition
     { label: 'Góndolas y etiquetas', path: '/rubros/supermarket#layout', desc: 'Ubicaciones, capacidad, reposición e impresión de precios', icon: 'Grid', badge: 'Nuevo' },
     { label: 'Fidelización Clientes', path: '/rubros/supermarket#loyalty', desc: 'Socios, puntos, campañas y premios', icon: 'Users', badge: 'Nuevo' },
     { label: 'Rentabilidad y reportes', path: '/rubros/supermarket#reports', desc: 'Margen por producto, categoría y sucursal', icon: 'Activity', badge: 'Nuevo' },
+    { label: 'Abastecimiento', path: '/rubros/supermarket#supply', desc: 'Pronóstico, proveedores, deuda y conciliación', icon: 'RefreshCw', badge: 'Nuevo' },
     { label: 'Facturación ARCA', path: '/billing', desc: 'Ticket fiscal con CAE', icon: 'CreditCard' },
   ],
   hardware_store: [
@@ -324,6 +325,7 @@ export const BUSINESS_NAVIGATION: Record<BusinessTypeCode, BusinessNavigationIte
     { label: 'Góndolas', path: '/rubros/supermarket#layout', icon: 'Grid' },
     { label: 'Fidelización', path: '/rubros/supermarket#loyalty', icon: 'Heart' },
     { label: 'Reportes', path: '/rubros/supermarket#reports', icon: 'Activity' },
+    { label: 'Abastecimiento', path: '/rubros/supermarket#supply', icon: 'RefreshCw' },
   ],
   hardware_store: [
     { label: 'Resumen', path: '/rubros/hardware_store', icon: 'LayoutDashboard' },

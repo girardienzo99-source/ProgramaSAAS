@@ -609,6 +609,48 @@ test('portal de proveedores aisla ordenes y confirma entregas con tokens tempora
   assert.match(supply, /Por seguridad, el token no vuelve a mostrarse/);
 });
 
+test('proveedores anuncian despachos y adjuntan remitos PDF privados', () => {
+  const migration = fs.readFileSync(
+    path.join(__dirname, '../../packages/database/supabase/migrations/20260718000033_supermarket_supplier_shipments.sql'),
+    'utf8',
+  );
+  const repository = fs.readFileSync(path.join(__dirname, 'src/lib/api/supermarketSupplierPortalRepository.ts'), 'utf8');
+  const shipmentRoute = fs.readFileSync(path.join(__dirname, 'src/app/api/public/v1/supplier-portal/shipments/route.ts'), 'utf8');
+  const documentRoute = fs.readFileSync(path.join(__dirname, 'src/app/api/public/v1/supplier-portal/documents/route.ts'), 'utf8');
+  const adminRoute = fs.readFileSync(path.join(__dirname, 'src/app/api/rubros/supermarket/supplier-shipments/route.ts'), 'utf8');
+  const validator = fs.readFileSync(path.join(__dirname, 'src/lib/api/supplierDocumentUpload.ts'), 'utf8');
+  const portal = fs.readFileSync(path.join(__dirname, 'src/components/supermarket/SupplierPortalConsole.tsx'), 'utf8');
+  const supply = fs.readFileSync(path.join(__dirname, 'src/components/supermarket/SupermarketSupplyConsole.tsx'), 'utf8');
+
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS public\.supermarket_supplier_shipments/);
+  ['supermarket_list_supplier_shipments', 'supermarket_supplier_upsert_shipment', 'supermarket_supplier_shipment_upload_scope', 'supermarket_supplier_attach_shipment_document'].forEach((fn) => {
+    assert.match(migration, new RegExp(`FUNCTION public\\.${fn}`));
+    assert.match(repository, new RegExp(`'${fn}'`));
+  });
+  assert.match(migration, /UNIQUE\(company_id, order_id\)/);
+  assert.match(migration, /lower\(trim\(o\.supplier_name\)\) = lower\(trim\(s\.name\)\)/);
+  assert.match(migration, /pg_advisory_xact_lock/);
+  assert.match(migration, /p_object_path NOT LIKE/);
+  assert.match(migration, /document_sha256 VARCHAR\(64\)/);
+  assert.match(migration, /public\.jwt_business_type\(\) = 'supermarket'/);
+  assert.match(shipmentRoute, /consumePublicRateLimit/);
+  assert.match(shipmentRoute, /requiredIdempotencyKey/);
+  assert.ok(shipmentRoute.indexOf('authenticate(request)') < shipmentRoute.indexOf('readJsonObject(request)'));
+  assert.match(documentRoute, /MAX_SUPPLIER_DOCUMENT_BYTES/);
+  assert.ok(documentRoute.indexOf('readSupplierPortalToken(request)') < documentRoute.indexOf('request.formData()'));
+  assert.match(validator, /header !== '%PDF-'/);
+  assert.match(validator, /trailer\.includes\('%%EOF'\)/);
+  assert.match(validator, /createHash\('sha256'\)/);
+  assert.match(repository, /storage\.from\('private-assets'\)\.upload/);
+  assert.match(repository, /createSignedUrl\(path, 300/);
+  assert.match(repository, /remove\(\[objectPath\]\)/);
+  assert.match(adminRoute, /supermarket\.supplier_shipments\.read/);
+  assert.match(portal, /Aviso de despacho/);
+  assert.match(portal, /Remito PDF \(maximo 10 MB\)/);
+  assert.doesNotMatch(portal, /localStorage|sessionStorage|document\.cookie/);
+  assert.match(supply, /Avisos de despacho/);
+});
+
 test('supermercado persiste catalogo, compras y lotes con recepcion atomica', () => {
   const migration = fs.readFileSync(
     path.join(__dirname, '../../packages/database/supabase/migrations/20260718000023_supermarket_domain.sql'),

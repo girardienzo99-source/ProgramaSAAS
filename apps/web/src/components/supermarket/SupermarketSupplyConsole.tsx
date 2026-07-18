@@ -11,12 +11,14 @@ import {
   ClipboardList,
   Copy,
   ExternalLink,
+  FileText,
   Gauge,
   KeyRound,
   Pencil,
   Plus,
   RefreshCw,
   Search,
+  Send,
   Settings2,
   ShieldCheck,
   TrendingUp,
@@ -32,7 +34,10 @@ import type {
   SupermarketPurchaseApprovalPolicy,
   SupermarketPurchaseApprovalRecord,
 } from '@/lib/api/supermarketSupplyRepository';
-import type { SupermarketSupplierPortalAccessRecord } from '@/lib/api/supermarketSupplierPortalRepository';
+import type {
+  SupermarketSupplierPortalAccessRecord,
+  SupermarketSupplierShipmentRecord,
+} from '@/lib/api/supermarketSupplierPortalRepository';
 
 type View = 'forecast' | 'suppliers' | 'accounts' | 'approvals' | 'portal';
 interface ProductOption { id: string; name: string; cost: number }
@@ -56,6 +61,7 @@ export default function SupermarketSupplyConsole({ products, purchases, onCreate
   const [forecast, setForecast] = useState<SupermarketSupplyForecastRecord[]>([]);
   const [approvals, setApprovals] = useState<SupermarketPurchaseApprovalRecord[]>([]);
   const [portalAccess, setPortalAccess] = useState<SupermarketSupplierPortalAccessRecord[]>([]);
+  const [shipments, setShipments] = useState<SupermarketSupplierShipmentRecord[]>([]);
   const [approvalPolicy, setApprovalPolicy] = useState<SupermarketPurchaseApprovalPolicy>({ enabled: true, autoApproveLimit: 100000, secondApprovalThreshold: 1000000 });
   const [lookbackDays, setLookbackDays] = useState(30);
   const [safetyDays, setSafetyDays] = useState(5);
@@ -73,16 +79,18 @@ export default function SupermarketSupplyConsole({ products, purchases, onCreate
   const load = useCallback(async (period = lookbackDays, safety = safetyDays) => {
     setLoading(true);
     try {
-      const [supplierResponse, documentResponse, forecastResponse, approvalResponse, portalResponse] = await Promise.all([
+      const [supplierResponse, documentResponse, forecastResponse, approvalResponse, portalResponse, shipmentResponse] = await Promise.all([
         apiFetch<{ items: SupermarketSupplierRecord[] }>('/api/rubros/supermarket/suppliers'),
         apiFetch<{ items: SupermarketSupplierDocumentRecord[] }>('/api/rubros/supermarket/supplier-documents'),
         apiFetch<{ items: SupermarketSupplyForecastRecord[] }>(`/api/rubros/supermarket/supply?lookbackDays=${period}&safetyDays=${safety}`),
         apiFetch<{ items: SupermarketPurchaseApprovalRecord[]; policy: SupermarketPurchaseApprovalPolicy }>('/api/rubros/supermarket/purchase-approvals'),
         apiFetch<{ items: SupermarketSupplierPortalAccessRecord[] }>('/api/rubros/supermarket/supplier-portal-access'),
+        apiFetch<{ items: SupermarketSupplierShipmentRecord[] }>('/api/rubros/supermarket/supplier-shipments'),
       ]);
       setSuppliers(supplierResponse.items); setDocuments(documentResponse.items); setForecast(forecastResponse.items);
       setApprovals(approvalResponse.items); setApprovalPolicy(approvalResponse.policy);
       setPortalAccess(portalResponse.items);
+      setShipments(shipmentResponse.items);
       setFeedback('');
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : 'No se pudo sincronizar el abastecimiento.');
@@ -180,6 +188,13 @@ export default function SupermarketSupplyConsole({ products, purchases, onCreate
     } catch (error) { setFeedback(error instanceof Error ? error.message : 'No se pudo revocar el acceso.'); }
   };
 
+  const openShipmentDocument = async (shipmentId: string) => {
+    try {
+      const response = await apiFetch<{ item: { url: string } }>(`/api/rubros/supermarket/supplier-shipments?shipmentId=${encodeURIComponent(shipmentId)}`);
+      window.open(response.item.url, '_blank', 'noopener,noreferrer');
+    } catch (error) { setFeedback(error instanceof Error ? error.message : 'No se pudo abrir el remito.'); }
+  };
+
   const tabs: Array<{ id: View; label: string; icon: typeof Gauge }> = [
     { id: 'forecast', label: 'Reposicion', icon: Gauge }, { id: 'suppliers', label: 'Proveedores', icon: Building2 }, { id: 'accounts', label: 'Conciliacion', icon: ClipboardList }, { id: 'approvals', label: 'Aprobaciones', icon: ShieldCheck }, { id: 'portal', label: 'Portal', icon: KeyRound },
   ];
@@ -198,7 +213,19 @@ export default function SupermarketSupplyConsole({ products, purchases, onCreate
 
     {view === 'approvals' && <div className="space-y-5"><div className="flex flex-col justify-between gap-3 border-y border-slate-200 bg-slate-50 px-4 py-3 sm:flex-row sm:items-center"><div><div className="flex items-center gap-2"><BadgeCheck className="h-4 w-4 text-emerald-700" /><h3 className="font-bold text-slate-950">Politica de autorizacion</h3></div><p className="mt-1 text-sm text-slate-600">Hasta {money(approvalPolicy.autoApproveLimit)} automatico; desde {money(approvalPolicy.secondApprovalThreshold)} requiere dos aprobadores.</p></div><button onClick={() => setEditingPolicy({ ...approvalPolicy })} className="flex h-9 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-bold text-slate-700"><Settings2 className="h-4 w-4" />Configurar</button></div><div><h3 className="font-bold text-slate-950">Borradores para enviar</h3><p className="text-sm text-slate-500">Las ordenes no pueden recibirse hasta completar este circuito.</p><div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">{purchases.filter((purchase) => purchase.status === 'draft').map((purchase) => { const existing = approvals.find((item) => item.orderId === purchase.id); const waiting = existing?.status === 'pending'; return <article key={purchase.id} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm"><div className="flex items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase text-slate-400">{purchase.id.slice(0, 12)}</p><h4 className="font-bold text-slate-950">{products.find((item) => item.id === purchase.productId)?.name ?? 'Producto'}</h4><p className="text-sm text-slate-500">{purchase.supplier}</p></div>{existing && <ApprovalStatus value={existing.status} />}</div><div className="mt-4 grid grid-cols-2 gap-3"><Value label="Cantidad" value={String(purchase.quantity)} /><Value label="Total" value={money(purchase.quantity * purchase.unitCost)} /></div><button onClick={() => void requestApproval(purchase.id)} disabled={waiting} className="mt-4 flex h-9 w-full items-center justify-center gap-2 rounded-md bg-emerald-600 text-sm font-bold text-white disabled:bg-slate-300"><ShieldCheck className="h-4 w-4" />{waiting ? 'Esperando aprobacion' : existing?.status === 'rejected' ? 'Reenviar a aprobacion' : 'Solicitar aprobacion'}</button></article>; })}</div>{!purchases.some((purchase) => purchase.status === 'draft') && <Empty text="No hay borradores pendientes de envio." />}</div><div><h3 className="mb-3 font-bold text-slate-950">Historial de autorizaciones</h3><div className="overflow-x-auto border border-slate-200 bg-white"><table className="w-full min-w-[920px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="px-4 py-3">Orden</th><th className="px-4 py-3">Compra</th><th className="px-4 py-3 text-right">Importe</th><th className="px-4 py-3">Progreso</th><th className="px-4 py-3">Estado</th><th className="px-4 py-3">Solicitud</th><th className="px-4 py-3"></th></tr></thead><tbody className="divide-y divide-slate-100">{approvals.map((approval) => <tr key={approval.id}><td className="px-4 py-3 font-mono font-bold">{approval.orderNumber ? `#${approval.orderNumber}` : approval.orderId.slice(0, 8)}</td><td className="px-4 py-3"><p className="font-bold text-slate-950">{approval.productName}</p><p className="text-xs text-slate-500">{approval.supplierName}</p></td><td className="px-4 py-3 text-right font-bold">{money(approval.amount)}</td><td className="px-4 py-3">{approval.requiredApprovals === 0 ? 'Automatica' : `${approval.approvalCount} de ${approval.requiredApprovals}`}</td><td className="px-4 py-3"><ApprovalStatus value={approval.status} /></td><td className="px-4 py-3 text-xs text-slate-500">{new Date(approval.requestedAt).toLocaleString('es-AR')}</td><td className="px-4 py-3"><div className="flex justify-end gap-2">{approval.canDecide && <><button onClick={() => setDecisionDraft({ requestId: approval.id, decision: 'rejected', notes: '' })} aria-label="Rechazar compra" className="rounded-md border border-rose-200 p-2 text-rose-700"><XCircle className="h-4 w-4" /></button><button onClick={() => setDecisionDraft({ requestId: approval.id, decision: 'approved', notes: '' })} aria-label="Aprobar compra" className="rounded-md bg-emerald-600 p-2 text-white"><Check className="h-4 w-4" /></button></>}</div></td></tr>)}</tbody></table>{!approvals.length && <Empty text="Todavia no hay solicitudes de aprobacion." />}</div></div></div>}
 
-    {view === 'portal' && <div className="space-y-4"><div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center"><div><h3 className="font-bold text-slate-950">Accesos externos</h3><p className="text-sm text-slate-500">Enlaces temporales por proveedor y sucursal.</p></div><div className="flex gap-2"><a href="/supplier-portal" target="_blank" rel="noreferrer" className="flex h-9 items-center gap-2 rounded-md border border-slate-300 px-3 text-sm font-bold text-slate-700"><ExternalLink className="h-4 w-4" />Abrir portal</a><button onClick={() => setAccessDraft({ supplierId: suppliers.find((item) => item.active)?.id ?? '', label: 'Acceso principal', expiresInDays: 30 })} className="flex h-9 items-center gap-2 rounded-md bg-emerald-600 px-3 text-sm font-bold text-white"><KeyRound className="h-4 w-4" />Nuevo acceso</button></div></div><div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{portalAccess.map((access) => <article key={access.id} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><h4 className="truncate font-bold text-slate-950">{access.supplierName}</h4><p className="truncate text-xs text-slate-500">{access.label}</p></div><span className={`rounded-full px-2 py-1 text-xs font-bold ${access.active ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>{access.active ? 'Activo' : 'Revocado'}</span></div><div className="mt-4 grid grid-cols-2 gap-3"><Value label="Vence" value={new Date(access.expiresAt).toLocaleDateString('es-AR')} /><Value label="Ultimo uso" value={access.lastUsedAt ? new Date(access.lastUsedAt).toLocaleDateString('es-AR') : 'Sin uso'} /></div>{access.active && <button onClick={() => void revokePortalAccess(access.id)} className="mt-4 flex h-9 w-full items-center justify-center gap-2 rounded-md border border-rose-200 text-sm font-bold text-rose-700"><XCircle className="h-4 w-4" />Revocar acceso</button>}</article>)}</div>{!portalAccess.length && <Empty text="Todavia no hay accesos externos." />}</div>}
+    {view === 'portal' && <div className="space-y-6">
+      <div className="space-y-4">
+        <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center"><div><h3 className="font-bold text-slate-950">Accesos externos</h3><p className="text-sm text-slate-500">Enlaces temporales por proveedor y sucursal.</p></div><div className="flex gap-2"><a href="/supplier-portal" target="_blank" rel="noreferrer" className="flex h-9 items-center gap-2 rounded-md border border-slate-300 px-3 text-sm font-bold text-slate-700"><ExternalLink className="h-4 w-4" />Abrir portal</a><button onClick={() => setAccessDraft({ supplierId: suppliers.find((item) => item.active)?.id ?? '', label: 'Acceso principal', expiresInDays: 30 })} className="flex h-9 items-center gap-2 rounded-md bg-emerald-600 px-3 text-sm font-bold text-white"><KeyRound className="h-4 w-4" />Nuevo acceso</button></div></div>
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{portalAccess.map((access) => <article key={access.id} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><h4 className="truncate font-bold text-slate-950">{access.supplierName}</h4><p className="truncate text-xs text-slate-500">{access.label}</p></div><span className={`rounded-full px-2 py-1 text-xs font-bold ${access.active ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>{access.active ? 'Activo' : 'Revocado'}</span></div><div className="mt-4 grid grid-cols-2 gap-3"><Value label="Vence" value={new Date(access.expiresAt).toLocaleDateString('es-AR')} /><Value label="Ultimo uso" value={access.lastUsedAt ? new Date(access.lastUsedAt).toLocaleDateString('es-AR') : 'Sin uso'} /></div>{access.active && <button onClick={() => void revokePortalAccess(access.id)} className="mt-4 flex h-9 w-full items-center justify-center gap-2 rounded-md border border-rose-200 text-sm font-bold text-rose-700"><XCircle className="h-4 w-4" />Revocar acceso</button>}</article>)}</div>
+        {!portalAccess.length && <Empty text="Todavia no hay accesos externos." />}
+      </div>
+      <div className="border-t border-slate-200 pt-5">
+        <div className="flex items-center gap-2"><Send className="h-4 w-4 text-emerald-700" /><h3 className="font-bold text-slate-950">Avisos de despacho</h3></div>
+        <p className="mt-1 text-sm text-slate-500">Remitos, transporte y fecha estimada informados por cada proveedor.</p>
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">{shipments.map((shipment) => <article key={shipment.id} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="text-xs font-bold uppercase text-slate-400">OC {shipment.orderNumber ?? shipment.orderId.slice(0, 8)}</p><h4 className="truncate font-bold text-slate-950">{shipment.productName}</h4><p className="truncate text-sm text-slate-500">{shipment.supplierName}</p></div><ShipmentStatus value={shipment.status} /></div><div className="mt-4 grid grid-cols-2 gap-3"><Value label="Remito" value={shipment.dispatchNumber} /><Value label="Arribo" value={new Date(`${shipment.estimatedArrival}T12:00:00`).toLocaleDateString('es-AR')} /><Value label="Transportista" value={shipment.carrier} /><Value label="Carga" value={`${shipment.packageCount} bultos / ${shipment.palletCount} pallets`} /></div>{shipment.documentAvailable && <button onClick={() => void openShipmentDocument(shipment.id)} className="mt-4 flex h-9 w-full items-center justify-center gap-2 rounded-md border border-emerald-200 text-sm font-bold text-emerald-800"><FileText className="h-4 w-4" />{shipment.documentName || 'Abrir remito PDF'}</button>}</article>)}</div>
+        {!shipments.length && <Empty text="Todavia no hay despachos anunciados." />}
+      </div>
+    </div>}
 
     {editingSupplier && <Modal title={editingSupplier.id ? 'Editar proveedor' : 'Nuevo proveedor'} onClose={() => setEditingSupplier(null)} footer={<><Secondary onClick={() => setEditingSupplier(null)}>Cancelar</Secondary><Primary onClick={() => void saveSupplier()} disabled={!editingSupplier.name.trim()}>Guardar</Primary></>}><div className="grid gap-4 sm:grid-cols-2"><Text label="Nombre" value={editingSupplier.name} set={(value) => setEditingSupplier({ ...editingSupplier, name: value })} wide /><Text label="CUIT" value={editingSupplier.taxId} set={(value) => setEditingSupplier({ ...editingSupplier, taxId: value })} /><Text label="Telefono" value={editingSupplier.phone} set={(value) => setEditingSupplier({ ...editingSupplier, phone: value })} /><Text label="Email" value={editingSupplier.email} set={(value) => setEditingSupplier({ ...editingSupplier, email: value })} /><Text label="Direccion" value={editingSupplier.address} set={(value) => setEditingSupplier({ ...editingSupplier, address: value })} /><NumberField label="Dias de entrega" value={editingSupplier.leadDays} set={(value) => setEditingSupplier({ ...editingSupplier, leadDays: Math.max(0, Number(value)) })} /><NumberField label="Limite de credito" value={editingSupplier.creditLimit} set={(value) => setEditingSupplier({ ...editingSupplier, creditLimit: Math.max(0, Number(value)) })} /></div></Modal>}
 
@@ -217,6 +244,7 @@ function Metric({ icon: Icon, label, value, detail, warning = false }: { icon: t
 function Risk({ value }: { value: SupermarketSupplyForecastRecord['risk'] }) { const style = value === 'out_of_stock' ? 'bg-rose-100 text-rose-700' : value === 'critical' ? 'bg-orange-100 text-orange-700' : value === 'attention' ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'; return <span className={`rounded-full px-2 py-1 text-xs font-bold ${style}`}>{riskLabel[value]}</span>; }
 function Reconciliation({ value }: { value: SupermarketSupplierDocumentRecord['reconciliationStatus'] }) { const matched = value === 'matched'; return <span className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-bold ${matched ? 'bg-emerald-100 text-emerald-700' : value === 'variance' ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>{matched && <CheckCircle2 className="h-3 w-3" />}{matched ? 'Conciliado' : value === 'variance' ? 'Con diferencia' : 'Sin conciliar'}</span>; }
 function ApprovalStatus({ value }: { value: SupermarketPurchaseApprovalRecord['status'] }) { const style = value === 'approved' || value === 'auto_approved' ? 'bg-emerald-100 text-emerald-700' : value === 'rejected' ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700'; const label = value === 'approved' ? 'Aprobada' : value === 'auto_approved' ? 'Automatica' : value === 'rejected' ? 'Rechazada' : 'Pendiente'; return <span className={`rounded-full px-2 py-1 text-xs font-bold ${style}`}>{label}</span>; }
+function ShipmentStatus({ value }: { value: SupermarketSupplierShipmentRecord['status'] }) { const style = value === 'delivered' ? 'bg-emerald-100 text-emerald-700' : value === 'cancelled' ? 'bg-rose-100 text-rose-700' : value === 'in_transit' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'; const label = value === 'delivered' ? 'Recibido' : value === 'cancelled' ? 'Cancelado' : value === 'in_transit' ? 'En transito' : 'Anunciado'; return <span className={`shrink-0 rounded-full px-2 py-1 text-xs font-bold ${style}`}>{label}</span>; }
 function Value({ label, value }: { label: string; value: string }) { return <div><p className="text-[10px] font-bold uppercase text-slate-400">{label}</p><p className="mt-1 font-bold text-slate-900">{value}</p></div>; }
 function Empty({ text }: { text: string }) { return <p className="py-10 text-center text-sm text-slate-500">{text}</p>; }
 function FieldLabel({ text }: { text: string }) { return <span className="mb-1.5 block text-xs font-bold text-slate-600">{text}</span>; }

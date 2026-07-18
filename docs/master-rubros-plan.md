@@ -311,7 +311,7 @@ Un rubro se marca `Completo` solamente cuando:
 | --- | --- | --- | --- |
 | 0 | Nucleo compartido | Completo: aislamiento, RBAC, RLS, storage, auditoria e idempotencia certificados | Pruebas de carga y observabilidad continua |
 | 1 | Gastronomia | Subprograma persistente certificado: salon, reservas, KDS, inventario, compras, caja, cola fiscal y reportes | Homologar transporte ARCA real y conciliar respuestas inciertas |
-| 2 | Supermercado | Catalogo, POS, inventario, compras, lotes, controles, gondolas, fidelizacion, rentabilidad, proveedores, conciliacion, pronostico, aprobaciones y portal externo certificados | Documentos PDF compartidos, ASN y EDI |
+| 2 | Supermercado | Catalogo, POS, inventario, compras, lotes, controles, gondolas, fidelizacion, rentabilidad, proveedores, conciliacion, pronostico, aprobaciones, portal externo, ASN y remitos PDF privados certificados | Recepcion parcial contra ASN y EDI |
 | 3 | Indumentaria | Demo integrada | Variantes, transferencias y devoluciones persistentes |
 | 4 | Ferreteria | Demo avanzada | Presupuestos, acopio, remitos y cuentas persistentes |
 | 5 | Taller mecanico | Demo avanzada | OT, fotos, aprobacion y repuestos persistentes |

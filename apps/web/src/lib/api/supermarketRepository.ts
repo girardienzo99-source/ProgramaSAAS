@@ -85,6 +85,35 @@ export interface SupermarketSaleResult {
   duplicate: boolean;
 }
 
+export interface SupermarketSalesReportRecord {
+  from: string;
+  to: string;
+  branchId: string | null;
+  summary: {
+    salesTotal: number;
+    netTotal: number;
+    taxTotal: number;
+    discountTotal: number;
+    costTotal: number;
+    grossProfit: number;
+    marginPercent: number;
+    tickets: number;
+    averageTicket: number;
+    previousSalesTotal: number;
+    previousGrossProfit: number;
+    returnsCount: number;
+    returnsValue: number;
+    costedLines: number;
+    totalLines: number;
+    costCoveragePercent: number;
+  };
+  daily: Array<{ day: string; sales: number; cost: number; profit: number; tickets: number }>;
+  payments: Array<{ method: 'cash' | 'qr'; amount: number; tickets: number }>;
+  categories: Array<{ category: string; quantity: number; netSales: number; cost: number; profit: number; marginPercent: number }>;
+  products: Array<{ productId: string; name: string; category: string; quantity: number; netSales: number; cost: number; profit: number; marginPercent: number }>;
+  branches: Array<{ branchId: string; name: string; sales: number; cost: number; profit: number; marginPercent: number; tickets: number }>;
+}
+
 export interface SupermarketReturnInput {
   idempotencyKey: string;
   barcode: string;
@@ -263,12 +292,32 @@ interface DatabaseLot {
   received_date: string;
 }
 
+interface LocalSupermarketSale {
+  id: string;
+  branchId: string;
+  paymentMethod: 'cash' | 'qr';
+  total: number;
+  netTotal: number;
+  taxTotal: number;
+  discountTotal: number;
+  createdAt: string;
+  lines: Array<{
+    productId: string;
+    name: string;
+    category: string;
+    quantity: number;
+    netSales: number;
+    cost: number;
+  }>;
+}
+
 interface LocalSupermarketState {
   products: Map<string, SupermarketProductRecord[]>;
   purchases: Map<string, SupermarketPurchaseRecord[]>;
   lots: Map<string, SupermarketLotRecord[]>;
   cash: Map<string, SupermarketCashState>;
   saleResults: Map<string, SupermarketSaleResult>;
+  sales: Map<string, LocalSupermarketSale[]>;
   returnResults: Map<string, SupermarketReturnResult>;
   inventoryEvents: Map<string, SupermarketInventoryEventRecord[]>;
   transfers: Map<string, SupermarketTransferRecord[]>;
@@ -286,6 +335,7 @@ const localState = globalWithSupermarket.__programaSassSupermarket ?? {
   lots: new Map<string, SupermarketLotRecord[]>(),
   cash: new Map<string, SupermarketCashState>(),
   saleResults: new Map<string, SupermarketSaleResult>(),
+  sales: new Map<string, LocalSupermarketSale[]>(),
   returnResults: new Map<string, SupermarketReturnResult>(),
   inventoryEvents: new Map<string, SupermarketInventoryEventRecord[]>(),
   transfers: new Map<string, SupermarketTransferRecord[]>(),
@@ -298,6 +348,7 @@ const localState = globalWithSupermarket.__programaSassSupermarket ?? {
 globalWithSupermarket.__programaSassSupermarket = localState;
 localState.cash ??= new Map<string, SupermarketCashState>();
 localState.saleResults ??= new Map<string, SupermarketSaleResult>();
+localState.sales ??= new Map<string, LocalSupermarketSale[]>();
 localState.returnResults ??= new Map<string, SupermarketReturnResult>();
 localState.inventoryEvents ??= new Map<string, SupermarketInventoryEventRecord[]>();
 localState.transfers ??= new Map<string, SupermarketTransferRecord[]>();
@@ -717,24 +768,47 @@ export async function commitSupermarketSale(context: SupermarketContext, input: 
   if (!cash?.isOpen) throw new ApiError(409, 'Debe abrir la caja antes de cobrar.', 'CASH_NOT_OPEN');
   const products = localProducts(context);
   let total = 0;
+  let netTotal = 0;
+  let discountTotal = 0;
+  const lines: LocalSupermarketSale['lines'] = [];
   for (const item of input.items) {
     const product = products.find((candidate) => candidate.id === item.productId && candidate.active);
     if (!product) throw new ApiError(404, 'Uno de los productos ya no esta disponible.', 'PRODUCT_NOT_FOUND');
     if (product.stock < item.quantity) throw new ApiError(409, 'El stock ya no alcanza.', 'INSUFFICIENT_STOCK');
     const list = product.price * item.quantity;
-    total += product.promo === '30off' ? list * 0.7 : product.promo === '2x1' && !product.isWeighed ? Math.ceil(item.quantity / 2) * product.price : list;
+    const lineTotal = product.promo === '30off'
+      ? list * 0.7
+      : product.promo === '2x1' && !product.isWeighed
+        ? Math.ceil(item.quantity / 2) * product.price
+        : list;
+    const lineNet = lineTotal / 1.21;
+    total += lineTotal;
+    netTotal += lineNet;
+    discountTotal += list - lineTotal;
+    lines.push({
+      productId: product.id, name: product.name, category: product.category,
+      quantity: item.quantity, netSales: Number(lineNet.toFixed(2)),
+      cost: Number((product.cost * item.quantity).toFixed(2)),
+    });
   }
   localState.products.set(localKey(context), products.map((product) => {
     const item = input.items.find((candidate) => candidate.productId === product.id);
     return item ? { ...product, stock: product.stock - item.quantity } : product;
   }));
   const roundedTotal = Number(total.toFixed(2));
+  const roundedNet = Number(netTotal.toFixed(2));
   const result: SupermarketSaleResult = {
     saleId: `sale-${crypto.randomUUID()}`, total: roundedTotal,
-    subtotal: Number((roundedTotal / 1.21).toFixed(2)), taxAmount: Number((roundedTotal - roundedTotal / 1.21).toFixed(2)),
-    discount: 0, fiscalStatus: 'pending', duplicate: false,
+    subtotal: roundedNet, taxAmount: Number((roundedTotal - roundedNet).toFixed(2)),
+    discount: Number(discountTotal.toFixed(2)), fiscalStatus: 'pending', duplicate: false,
   };
   localState.saleResults.set(resultKey, result);
+  const companySales = localState.sales.get(context.companyId) ?? [];
+  localState.sales.set(context.companyId, [{
+    id: result.saleId, branchId: branchId(context), paymentMethod: input.paymentMethod,
+    total: result.total, netTotal: result.subtotal, taxTotal: result.taxAmount,
+    discountTotal: result.discount, createdAt: new Date().toISOString(), lines,
+  }, ...companySales]);
   localState.cash.set(localKey(context), {
     ...cash, salesTotal: cash.salesTotal + roundedTotal, ticketCount: cash.ticketCount + 1,
     cashPayments: cash.cashPayments + (input.paymentMethod === 'cash' ? roundedTotal : 0),
@@ -742,6 +816,150 @@ export async function commitSupermarketSale(context: SupermarketContext, input: 
     expectedCash: cash.expectedCash + (input.paymentMethod === 'cash' ? roundedTotal : 0),
   });
   return result;
+}
+
+function normalizeSupermarketSalesReport(value: Record<string, unknown>): SupermarketSalesReportRecord {
+  const summary = (value.summary ?? {}) as Record<string, unknown>;
+  const rows = (input: unknown): Array<Record<string, unknown>> => Array.isArray(input) ? input as Array<Record<string, unknown>> : [];
+  return {
+    from: String(value.from ?? ''), to: String(value.to ?? ''),
+    branchId: value.branchId ? String(value.branchId) : null,
+    summary: {
+      salesTotal: Number(summary.salesTotal ?? 0), netTotal: Number(summary.netTotal ?? 0),
+      taxTotal: Number(summary.taxTotal ?? 0), discountTotal: Number(summary.discountTotal ?? 0),
+      costTotal: Number(summary.costTotal ?? 0), grossProfit: Number(summary.grossProfit ?? 0),
+      marginPercent: Number(summary.marginPercent ?? 0), tickets: Number(summary.tickets ?? 0),
+      averageTicket: Number(summary.averageTicket ?? 0), previousSalesTotal: Number(summary.previousSalesTotal ?? 0),
+      previousGrossProfit: Number(summary.previousGrossProfit ?? 0), returnsCount: Number(summary.returnsCount ?? 0),
+      returnsValue: Number(summary.returnsValue ?? 0), costedLines: Number(summary.costedLines ?? 0),
+      totalLines: Number(summary.totalLines ?? 0), costCoveragePercent: Number(summary.costCoveragePercent ?? 100),
+    },
+    daily: rows(value.daily).map((item) => ({
+      day: String(item.day), sales: Number(item.sales), cost: Number(item.cost),
+      profit: Number(item.profit), tickets: Number(item.tickets),
+    })),
+    payments: rows(value.payments).map((item) => ({
+      method: item.method as 'cash' | 'qr', amount: Number(item.amount), tickets: Number(item.tickets),
+    })),
+    categories: rows(value.categories).map((item) => ({
+      category: String(item.category), quantity: Number(item.quantity), netSales: Number(item.netSales),
+      cost: Number(item.cost), profit: Number(item.profit), marginPercent: Number(item.marginPercent),
+    })),
+    products: rows(value.products).map((item) => ({
+      productId: String(item.productId), name: String(item.name), category: String(item.category),
+      quantity: Number(item.quantity), netSales: Number(item.netSales), cost: Number(item.cost),
+      profit: Number(item.profit), marginPercent: Number(item.marginPercent),
+    })),
+    branches: rows(value.branches).map((item) => ({
+      branchId: String(item.branchId), name: String(item.name), sales: Number(item.sales),
+      cost: Number(item.cost), profit: Number(item.profit), marginPercent: Number(item.marginPercent),
+      tickets: Number(item.tickets),
+    })),
+  };
+}
+
+const reportRound = (value: number) => Number(value.toFixed(2));
+
+export async function getSupermarketSalesReport(
+  context: SupermarketContext,
+  from: Date,
+  to: Date,
+  selectedBranchId: string | null,
+): Promise<SupermarketSalesReportRecord> {
+  if (isServerSupabaseAdminConfigured) {
+    const { data, error } = await createAdminServerClient().rpc('supermarket_sales_report', {
+      p_company_id: context.companyId, p_branch_id: selectedBranchId,
+      p_from: from.toISOString(), p_to: to.toISOString(),
+    });
+    if (error?.message.includes('INVALID_REPORT_PERIOD')) {
+      throw new ApiError(400, 'El periodo del reporte no es valido.', 'INVALID_REPORT_PERIOD');
+    }
+    if (error?.message.includes('BRANCH_COMPANY_MISMATCH')) {
+      throw new ApiError(404, 'La sucursal no pertenece a esta empresa.', 'BRANCH_NOT_FOUND');
+    }
+    if (error || !data || typeof data !== 'object') {
+      throw new ApiError(503, 'No se pudo generar el reporte del supermercado.', 'SUPERMARKET_REPORT_UNAVAILABLE');
+    }
+    return normalizeSupermarketSalesReport(data as Record<string, unknown>);
+  }
+  if (process.env.NODE_ENV === 'production') persistenceUnavailable();
+
+  const allSales = localState.sales.get(context.companyId) ?? [];
+  const inScope = (sale: LocalSupermarketSale, start: Date, end: Date) => {
+    const createdAt = new Date(sale.createdAt).getTime();
+    return createdAt >= start.getTime() && createdAt < end.getTime()
+      && (!selectedBranchId || sale.branchId === selectedBranchId);
+  };
+  const sales = allSales.filter((sale) => inScope(sale, from, to));
+  const previousFrom = new Date(from.getTime() - (to.getTime() - from.getTime()));
+  const previous = allSales.filter((sale) => inScope(sale, previousFrom, from));
+  const categoryMap = new Map<string, SupermarketSalesReportRecord['categories'][number]>();
+  const productMap = new Map<string, SupermarketSalesReportRecord['products'][number]>();
+  const branchMap = new Map<string, SupermarketSalesReportRecord['branches'][number]>();
+  const dailyMap = new Map<string, SupermarketSalesReportRecord['daily'][number]>();
+  const paymentMap = new Map<'cash' | 'qr', SupermarketSalesReportRecord['payments'][number]>();
+  let totalLines = 0;
+
+  for (const sale of sales) {
+    const saleCost = sale.lines.reduce((sum, line) => sum + line.cost, 0);
+    const day = sale.createdAt.slice(0, 10);
+    const daily = dailyMap.get(day) ?? { day, sales: 0, cost: 0, profit: 0, tickets: 0 };
+    daily.sales += sale.total; daily.cost += saleCost; daily.profit += sale.netTotal - saleCost; daily.tickets += 1;
+    dailyMap.set(day, daily);
+    const payment = paymentMap.get(sale.paymentMethod) ?? { method: sale.paymentMethod, amount: 0, tickets: 0 };
+    payment.amount += sale.total; payment.tickets += 1; paymentMap.set(sale.paymentMethod, payment);
+    const branch = branchMap.get(sale.branchId) ?? {
+      branchId: sale.branchId, name: sale.branchId === context.branchId ? 'Sucursal actual' : 'Sucursal',
+      sales: 0, cost: 0, profit: 0, marginPercent: 0, tickets: 0,
+    };
+    branch.sales += sale.total; branch.cost += saleCost; branch.profit += sale.netTotal - saleCost; branch.tickets += 1;
+    branchMap.set(sale.branchId, branch);
+    for (const line of sale.lines) {
+      totalLines += 1;
+      const category = categoryMap.get(line.category) ?? {
+        category: line.category, quantity: 0, netSales: 0, cost: 0, profit: 0, marginPercent: 0,
+      };
+      category.quantity += line.quantity; category.netSales += line.netSales; category.cost += line.cost;
+      category.profit += line.netSales - line.cost; categoryMap.set(line.category, category);
+      const product = productMap.get(line.productId) ?? {
+        productId: line.productId, name: line.name, category: line.category,
+        quantity: 0, netSales: 0, cost: 0, profit: 0, marginPercent: 0,
+      };
+      product.quantity += line.quantity; product.netSales += line.netSales; product.cost += line.cost;
+      product.profit += line.netSales - line.cost; productMap.set(line.productId, product);
+    }
+  }
+
+  const withMargin = <T extends { netSales: number; profit: number }>(row: T) => ({
+    ...row, netSales: reportRound(row.netSales), profit: reportRound(row.profit),
+    marginPercent: row.netSales ? reportRound(row.profit * 100 / row.netSales) : 0,
+  });
+  const salesTotal = sales.reduce((sum, sale) => sum + sale.total, 0);
+  const netTotal = sales.reduce((sum, sale) => sum + sale.netTotal, 0);
+  const costTotal = sales.flatMap((sale) => sale.lines).reduce((sum, line) => sum + line.cost, 0);
+  const grossProfit = netTotal - costTotal;
+  return {
+    from: from.toISOString(), to: to.toISOString(), branchId: selectedBranchId,
+    summary: {
+      salesTotal: reportRound(salesTotal), netTotal: reportRound(netTotal),
+      taxTotal: reportRound(sales.reduce((sum, sale) => sum + sale.taxTotal, 0)),
+      discountTotal: reportRound(sales.reduce((sum, sale) => sum + sale.discountTotal, 0)),
+      costTotal: reportRound(costTotal), grossProfit: reportRound(grossProfit),
+      marginPercent: netTotal ? reportRound(grossProfit * 100 / netTotal) : 0,
+      tickets: sales.length, averageTicket: sales.length ? reportRound(salesTotal / sales.length) : 0,
+      previousSalesTotal: reportRound(previous.reduce((sum, sale) => sum + sale.total, 0)),
+      previousGrossProfit: reportRound(previous.reduce((sum, sale) => sum + sale.netTotal - sale.lines.reduce((lineSum, line) => lineSum + line.cost, 0), 0)),
+      returnsCount: 0, returnsValue: 0, costedLines: totalLines, totalLines, costCoveragePercent: 100,
+    },
+    daily: [...dailyMap.values()].map((row) => ({ ...row, sales: reportRound(row.sales), cost: reportRound(row.cost), profit: reportRound(row.profit) })).sort((a, b) => a.day.localeCompare(b.day)),
+    payments: [...paymentMap.values()].map((row) => ({ ...row, amount: reportRound(row.amount) })).sort((a, b) => b.amount - a.amount),
+    categories: [...categoryMap.values()].map(withMargin).map((row) => ({ ...row, cost: reportRound(row.cost) })).sort((a, b) => b.netSales - a.netSales),
+    products: [...productMap.values()].map(withMargin).map((row) => ({ ...row, cost: reportRound(row.cost) })).sort((a, b) => b.netSales - a.netSales),
+    branches: [...branchMap.values()].map((row) => ({
+      ...row, sales: reportRound(row.sales), cost: reportRound(row.cost), profit: reportRound(row.profit),
+      marginPercent: row.profit + row.cost ? reportRound(row.profit * 100 / (row.profit + row.cost)) : 0,
+    })).sort((a, b) => b.sales - a.sales),
+  };
 }
 
 export async function registerSupermarketReturn(context: SupermarketContext, input: SupermarketReturnInput): Promise<SupermarketReturnResult> {

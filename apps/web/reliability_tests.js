@@ -459,6 +459,39 @@ test('supermercado persiste fidelizacion, campanas y canjes sin cruzar rubros', 
   assert.match(config, /supermarket#loyalty/);
 });
 
+test('supermercado calcula rentabilidad historica y consolida sucursales', () => {
+  const migration = fs.readFileSync(
+    path.join(__dirname, '../../packages/database/supabase/migrations/20260718000028_supermarket_reports.sql'),
+    'utf8',
+  );
+  const workspace = fs.readFileSync(path.join(__dirname, 'src/components/supermarket/SupermarketWorkspaceConsole.tsx'), 'utf8');
+  const reports = fs.readFileSync(path.join(__dirname, 'src/components/supermarket/SupermarketReportsConsole.tsx'), 'utf8');
+  const config = fs.readFileSync(path.join(__dirname, 'src/config/businessTypes.ts'), 'utf8');
+  const repository = fs.readFileSync(path.join(__dirname, 'src/lib/api/supermarketRepository.ts'), 'utf8');
+  const route = fs.readFileSync(path.join(__dirname, 'src/app/api/rubros/supermarket/reports/route.ts'), 'utf8');
+
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS public\.supermarket_sale_cost_snapshots/);
+  assert.match(migration, /supermarket_capture_sale_costs_trigger/);
+  assert.match(migration, /ON CONFLICT \(sale_item_id\) DO NOTHING/);
+  assert.match(migration, /public\.jwt_business_type\(\) = 'supermarket'/);
+  assert.match(migration, /FUNCTION public\.supermarket_sales_report/);
+  assert.match(migration, /p_branch_id IS NULL OR r\.branch_id = p_branch_id/g);
+  assert.match(migration, /previousGrossProfit/);
+  assert.match(migration, /costCoveragePercent/);
+  assert.match(migration, /LIMIT 100/);
+  assert.match(migration, /supermarket\.reports\.read/);
+  assert.match(migration, /supermarket\.reports\.export/);
+  assert.match(repository, /'supermarket_sales_report'/);
+  assert.match(repository, /LocalSupermarketSale/);
+  assert.match(route, /authorizeRequest\(request, permission, 'supermarket'\)/);
+  assert.match(route, /format === 'csv'/);
+  assert.match(route, /\^\[=\+\\-@\]/);
+  assert.match(workspace, /SupermarketReportsConsole/);
+  assert.match(reports, /Rentabilidad por producto/);
+  assert.match(reports, /Todas/);
+  assert.match(config, /supermarket#reports/);
+});
+
 test('supermercado persiste catalogo, compras y lotes con recepcion atomica', () => {
   const migration = fs.readFileSync(
     path.join(__dirname, '../../packages/database/supabase/migrations/20260718000023_supermarket_domain.sql'),

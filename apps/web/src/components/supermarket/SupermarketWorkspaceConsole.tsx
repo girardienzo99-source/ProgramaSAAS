@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, type ChangeEvent, type FormEvent, type Re
 import {
   AlertTriangle,
   ArrowLeftRight,
+  BarChart3,
   Barcode,
   Boxes,
   CalendarClock,
@@ -31,8 +32,9 @@ import SupermarketConsole, {
   type SupermarketSaleResult,
 } from './SupermarketConsole';
 import SupermarketLoyaltyConsole from './SupermarketLoyaltyConsole';
+import SupermarketReportsConsole from './SupermarketReportsConsole';
 
-type Area = 'pos' | 'catalog' | 'inventory' | 'purchases' | 'lots' | 'operations' | 'layout' | 'loyalty';
+type Area = 'pos' | 'catalog' | 'inventory' | 'purchases' | 'lots' | 'operations' | 'layout' | 'loyalty' | 'reports';
 type ProductFilter = 'all' | 'active' | 'paused' | 'low' | 'expiring';
 type PurchaseStatus = 'draft' | 'ordered' | 'received';
 
@@ -187,7 +189,7 @@ export default function SupermarketWorkspaceConsole() {
   useEffect(() => {
     const sync = () => {
       const hash = window.location.hash.slice(1) as Area;
-      if (['pos', 'catalog', 'inventory', 'purchases', 'lots', 'operations', 'layout', 'loyalty'].includes(hash)) setArea(hash);
+      if (['pos', 'catalog', 'inventory', 'purchases', 'lots', 'operations', 'layout', 'loyalty', 'reports'].includes(hash)) setArea(hash);
     };
     sync();
     window.addEventListener('hashchange', sync);
@@ -500,6 +502,7 @@ export default function SupermarketWorkspaceConsole() {
     { id: 'operations', label: 'Control', icon: ClipboardCheck },
     { id: 'layout', label: 'Gondolas', icon: LayoutGrid },
     { id: 'loyalty', label: 'Fidelizacion', icon: Gift },
+    { id: 'reports', label: 'Reportes', icon: BarChart3 },
   ];
 
   return (
@@ -572,6 +575,8 @@ export default function SupermarketWorkspaceConsole() {
       />}
 
       {area === 'loyalty' && <SupermarketLoyaltyConsole />}
+
+      {area === 'reports' && <SupermarketReportsConsole branches={branches} />}
 
       {editingProduct && <ProductEditor product={editingProduct} setProduct={setEditingProduct} onImage={uploadImage} onSave={saveProduct} onClose={() => setEditingProduct(null)} />}
       {editingPurchase && <PurchaseEditor purchase={editingPurchase} setPurchase={setEditingPurchase} products={products} onSave={savePurchase} onClose={() => setEditingPurchase(null)} />}

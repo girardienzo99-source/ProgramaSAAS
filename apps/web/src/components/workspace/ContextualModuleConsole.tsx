@@ -4,9 +4,14 @@ import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { ShieldX } from 'lucide-react';
 import type { ComponentType } from 'react';
-import { getBusinessType, type BusinessTypeCode } from '@/config/businessTypes';
+import {
+  getBusinessType,
+  isContextualModuleSupported,
+  type BusinessTypeCode,
+  type ContextualModuleCode,
+} from '@/config/businessTypes';
 
-export type ContextualModule = 'appointments' | 'products' | 'inventory' | 'contacts';
+export type ContextualModule = ContextualModuleCode;
 
 const loading = () => <div className="flex min-h-72 items-center justify-center text-sm text-slate-500">Cargando modulo aislado...</div>;
 const Healthcare = dynamic(() => import('@/components/healthcare/HealthcareConsole'), { loading });
@@ -43,13 +48,6 @@ const ownConsole: Record<BusinessTypeCode, ComponentType> = {
   laundry_dryclean: Laundry,
 };
 
-const moduleSupport: Record<ContextualModule, BusinessTypeCode[]> = {
-  appointments: ['healthcare', 'automotive', 'beauty_salon', 'professional_services', 'pet_shop', 'real_estate', 'hotel_hospitality', 'education'],
-  products: ['gastronomy', 'retail_apparel', 'supermarket', 'hardware_store', 'automotive', 'beauty_salon', 'electronics', 'pet_shop', 'real_estate'],
-  inventory: ['gastronomy', 'retail_apparel', 'supermarket', 'hardware_store', 'automotive', 'beauty_salon', 'gym', 'electronics', 'pet_shop', 'laundry_dryclean'],
-  contacts: ['gastronomy', 'retail_apparel', 'healthcare', 'supermarket', 'hardware_store', 'automotive', 'beauty_salon', 'gym', 'professional_services', 'pet_shop', 'real_estate', 'hotel_hospitality', 'education', 'laundry_dryclean'],
-};
-
 function IsolationNotice({ module, businessTypeCode }: { module: ContextualModule; businessTypeCode?: BusinessTypeCode }) {
   const business = businessTypeCode ? getBusinessType(businessTypeCode) : null;
   return <div className="flex min-h-72 items-center justify-center rounded-lg border border-blue-200 bg-blue-50 p-6 text-center" data-testid="module-isolation-notice">
@@ -58,7 +56,7 @@ function IsolationNotice({ module, businessTypeCode }: { module: ContextualModul
 }
 
 export default function ContextualModuleConsole({ module, businessTypeCode }: { module: ContextualModule; businessTypeCode?: BusinessTypeCode }) {
-  if (!businessTypeCode || !moduleSupport[module].includes(businessTypeCode)) return <IsolationNotice module={module} businessTypeCode={businessTypeCode} />;
+  if (!businessTypeCode || !isContextualModuleSupported(businessTypeCode, module)) return <IsolationNotice module={module} businessTypeCode={businessTypeCode} />;
   const Console = ownConsole[businessTypeCode];
   return <div data-business-type={businessTypeCode} data-contextual-module={module}><Console key={`${businessTypeCode}:${module}`} /></div>;
 }

@@ -10,6 +10,7 @@ const coreModule = import(pathToFileURL(path.join(__dirname, 'src/lib/api/core.t
 const publicStoreModule = import(pathToFileURL(path.join(__dirname, 'src/lib/api/publicDataStore.ts')).href);
 const permissionRulesModule = import(pathToFileURL(path.join(__dirname, 'src/lib/api/permissionRules.ts')).href);
 const imageRulesModule = import(pathToFileURL(path.join(__dirname, 'src/lib/api/imageRules.ts')).href);
+const businessTypesModule = import(pathToFileURL(path.join(__dirname, 'src/config/businessTypes.ts')).href);
 
 test('readJsonObject acepta objetos JSON', async () => {
   const { readJsonObject } = await coreModule;
@@ -102,6 +103,38 @@ test('los 15 rubros tienen una consola registrada y una ruta estable', () => {
   businessTypes.forEach((code) => assert.match(registry, new RegExp(`\\b${code}:`)));
   assert.match(route, /generateStaticParams/);
   assert.match(route, /isBusinessTypeCode/);
+});
+
+test('el registro de rubros es completo, estricto y no contiene rutas cruzadas', async () => {
+  const {
+    BUSINESS_TYPES,
+    BUSINESS_MODULES,
+    BUSINESS_NAVIGATION,
+    getBusinessModuleCount,
+    getBusinessType,
+  } = await businessTypesModule;
+  const codes = BUSINESS_TYPES.map((businessType) => businessType.code);
+
+  assert.equal(codes.length, 15);
+  assert.equal(new Set(codes).size, codes.length);
+  assert.deepEqual(Object.keys(BUSINESS_MODULES).sort(), [...codes].sort());
+  assert.deepEqual(Object.keys(BUSINESS_NAVIGATION).sort(), [...codes].sort());
+
+  for (const code of codes) {
+    assert.equal(getBusinessType(code).code, code);
+    assert.equal(getBusinessModuleCount(code), BUSINESS_MODULES[code].length);
+    assert.ok(BUSINESS_MODULES[code].length >= 3, `${code} debe ofrecer al menos tres modulos`);
+    for (const module of BUSINESS_MODULES[code]) {
+      const routeBusinessType = module.path.match(/^\/rubros\/([^/?#]+)/)?.[1];
+      assert.ok(!routeBusinessType || routeBusinessType === code, `${code} contiene una ruta hacia ${routeBusinessType}`);
+    }
+    for (const navigation of BUSINESS_NAVIGATION[code]) {
+      const routeBusinessType = navigation.path.match(/^\/rubros\/([^/?#]+)/)?.[1];
+      assert.ok(!routeBusinessType || routeBusinessType === code, `${code} contiene navegacion hacia ${routeBusinessType}`);
+    }
+  }
+
+  assert.throws(() => getBusinessType('unknown_business'), /not registered/);
 });
 
 test('indumentaria usa enlaces integrados dentro de su espacio de trabajo', () => {
@@ -352,7 +385,7 @@ test('la interfaz no usa fallbacks de datos entre rubros', () => {
   const productsApi = fs.readFileSync(path.join(__dirname, 'src/app/api/public/v1/products/route.ts'), 'utf8');
   const retailCatalog = fs.readFileSync(path.join(__dirname, 'src/components/products/ProductCatalog.tsx'), 'utf8');
   assert.doesNotMatch(contextual, /fallbackConsoles/);
-  assert.match(contextual, /moduleSupport/);
+  assert.match(contextual, /isContextualModuleSupported/);
   assert.match(contextual, /module-isolation-notice/);
   assert.match(shell, /getIsolatedHref/);
   assert.match(workspace, /<Console key={code}/);

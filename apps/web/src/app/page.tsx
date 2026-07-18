@@ -24,7 +24,7 @@ import {
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import AppShell from '@/components/layout/AppShell';
-import { BUSINESS_TYPES } from '@/config/businessTypes';
+import { BUSINESS_TYPES, getBusinessModuleCount } from '@/config/businessTypes';
 
 const icons: Record<string, LucideIcon> = {
   Activity, Briefcase, Calendar, Clock, GraduationCap, Heart, HomeIcon, Key,
@@ -90,7 +90,7 @@ export default function Home() {
                         <Icon className="h-4.5 w-4.5" />
                       </span>
                       <span className="rounded-md bg-slate-100 px-2 py-1 text-[10px] font-semibold text-slate-500">
-                        {businessType.activatedModules.length} módulos
+                        {getBusinessModuleCount(businessType.code)} módulos
                       </span>
                     </div>
                     <h3 className="mt-3 text-sm font-extrabold text-slate-900 group-hover:text-blue-700">{businessType.name}</h3>

@@ -3,30 +3,74 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
-  Boxes,
+  Activity,
+  Barcode,
+  Briefcase,
+  Building,
+  Calendar,
   CalendarDays,
   ChevronRight,
   CircleHelp,
-  ContactRound,
   CreditCard,
+  DollarSign,
+  FileCheck,
+  FileText,
+  GraduationCap,
+  Grid3X3,
+  HardHat,
+  Heart,
+  Home,
+  Key,
+  Laptop,
   LayoutDashboard,
-  PackageSearch,
+  Package,
+  RefreshCw,
   Search,
+  Scissors,
+  Settings,
   ShieldCheck,
-  ShoppingCart,
+  Shield,
+  Shirt,
+  Sparkles,
+  Users,
+  Utensils,
+  Wrench,
+  Clock,
+  type LucideIcon,
 } from 'lucide-react';
 import type { ReactNode } from 'react';
-import { getBusinessType, type BusinessTypeCode } from '@/config/businessTypes';
+import { getBusinessNavigation, getBusinessType, type BusinessTypeCode } from '@/config/businessTypes';
 
-const primaryNavigation = [
-  { href: '/dashboard', label: 'Resumen', icon: LayoutDashboard },
-  { href: '/pos', label: 'Ventas', icon: ShoppingCart },
-  { href: '/products', label: 'Catálogo', icon: PackageSearch },
-  { href: '/inventory', label: 'Inventario', icon: Boxes },
-  { href: '/contacts', label: 'Contactos', icon: ContactRound },
-  { href: '/appointments', label: 'Agenda', icon: CalendarDays },
-  { href: '/billing', label: 'ARCA', icon: CreditCard },
-];
+const navigationIcons: Record<string, LucideIcon> = {
+  Activity,
+  Barcode,
+  Briefcase,
+  Building,
+  Calendar,
+  CalendarDays,
+  Clock,
+  DollarSign,
+  FileCheck,
+  FileText,
+  GraduationCap,
+  Grid: Grid3X3,
+  HardHat,
+  Heart,
+  Home,
+  Key,
+  Laptop,
+  LayoutDashboard,
+  Package,
+  RefreshCw,
+  Scissors,
+  Settings,
+  Shield,
+  Shirt,
+  Sparkles,
+  Users,
+  Utensils,
+  Wrench,
+};
 
 const isolatedWorkspaceTargets: Partial<Record<BusinessTypeCode, Partial<Record<string, string>>>> = {
   gastronomy: { '/pos': '/rubros/gastronomy#salon', '/products': '/rubros/gastronomy#menu', '/inventory': '/rubros/gastronomy#ingredients', '/appointments': '/rubros/gastronomy#salon' },
@@ -39,9 +83,20 @@ const isolatedWorkspaceTargets: Partial<Record<BusinessTypeCode, Partial<Record<
 
 function getIsolatedHref(code: BusinessTypeCode | undefined, href: string) {
   if (!code) return href;
+  if (href.startsWith('/rubros/')) return href;
   if (href === '/billing') return `${href}?rubro=${code}`;
   if (href === '/dashboard') return `/rubros/${code}`;
   return isolatedWorkspaceTargets[code]?.[href] ?? `/rubros/${code}`;
+}
+
+function getPrimaryNavigation(code: BusinessTypeCode | undefined) {
+  if (!code) return [];
+  const navigation = getBusinessNavigation(code).map((item) => ({
+    href: item.path,
+    label: item.label,
+    icon: navigationIcons[item.icon] ?? LayoutDashboard,
+  }));
+  return [...navigation, { href: '/billing', label: 'ARCA', icon: CreditCard }];
 }
 
 interface AppShellProps {
@@ -69,6 +124,7 @@ export default function AppShell({
 }: AppShellProps) {
   const pathname = usePathname();
   const businessType = businessTypeCode ? getBusinessType(businessTypeCode) : null;
+  const primaryNavigation = getPrimaryNavigation(businessTypeCode);
 
   return (
     <div className="app-theme min-h-screen bg-slate-50 text-slate-900">

@@ -32,7 +32,7 @@ import {
 } from 'lucide-react';
 import type { ComponentType } from 'react';
 import AppShell from '@/components/layout/AppShell';
-import { getBusinessModules, getBusinessType, type BusinessTypeCode } from '@/config/businessTypes';
+import { getBusinessModuleCount, getBusinessModules, getBusinessType, type BusinessTypeCode } from '@/config/businessTypes';
 
 const loading = () => <div className="flex min-h-72 items-center justify-center text-sm text-slate-500">Cargando espacio de trabajo...</div>;
 
@@ -91,7 +91,7 @@ export default function RubroWorkspace({ code }: { code: BusinessTypeCode }) {
       eyebrow="Espacio de trabajo"
       title={businessType.name}
       description={businessType.description}
-      status={`${businessType.activatedModules.length} módulos activos`}
+      status={`${getBusinessModuleCount(code)} módulos disponibles`}
       businessTypeCode={code}
       contentClassName="max-w-none"
       actions={(

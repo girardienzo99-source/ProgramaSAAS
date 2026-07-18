@@ -39,6 +39,8 @@ export interface BusinessNavigationItem {
   icon: string;
 }
 
+export type ContextualModuleCode = 'appointments' | 'products' | 'inventory' | 'contacts';
+
 const CORE_MODULES = ['pos', 'inventory', 'contacts'];
 
 export const BUSINESS_TYPES: BusinessTypeDefinition[] = [
@@ -290,18 +292,18 @@ export const BUSINESS_MODULES: Record<BusinessTypeCode, BusinessModuleDefinition
 
 export const BUSINESS_NAVIGATION: Record<BusinessTypeCode, BusinessNavigationItem[]> = {
   gastronomy: [
-    { label: 'Dashboard', path: '/dashboard', icon: 'LayoutDashboard' },
-    { label: 'Mapa de Salón', path: '/salon', icon: 'Utensils' },
-    { label: 'Ventas (POS)', path: '/pos', icon: 'DollarSign' },
-    { label: 'Ingredientes/Bebidas', path: '/inventory', icon: 'Package' },
-    { label: 'Clientes Gastronómicos', path: '/contacts', icon: 'Users' },
+    { label: 'Resumen', path: '/rubros/gastronomy', icon: 'LayoutDashboard' },
+    { label: 'Salón', path: '/rubros/gastronomy#salon', icon: 'Utensils' },
+    { label: 'Carta', path: '/rubros/gastronomy#menu', icon: 'FileText' },
+    { label: 'Insumos', path: '/rubros/gastronomy#ingredients', icon: 'Package' },
+    { label: 'Compras', path: '/rubros/gastronomy#purchases', icon: 'Building' },
   ],
   retail_apparel: [
-    { label: 'Dashboard', path: '/dashboard', icon: 'LayoutDashboard' },
-    { label: 'Ventas POS', path: '/pos', icon: 'DollarSign' },
-    { label: 'Catálogo de Ropa', path: '/products', icon: 'Shirt' },
-    { label: 'Matriz Talles/Colores', path: '/inventory', icon: 'Grid' },
-    { label: 'Proveedores Textiles', path: '/contacts', icon: 'Users' },
+    { label: 'Resumen', path: '/rubros/retail_apparel', icon: 'LayoutDashboard' },
+    { label: 'Catálogo', path: '/rubros/retail_apparel#catalog', icon: 'Shirt' },
+    { label: 'Probador', path: '/rubros/retail_apparel#fitting', icon: 'Sparkles' },
+    { label: 'Devoluciones', path: '/rubros/retail_apparel#returns', icon: 'RefreshCw' },
+    { label: 'Club de puntos', path: '/rubros/retail_apparel#loyalty', icon: 'Heart' },
   ],
   healthcare: [
     { label: 'Dashboard', path: '/dashboard', icon: 'LayoutDashboard' },
@@ -310,28 +312,32 @@ export const BUSINESS_NAVIGATION: Record<BusinessTypeCode, BusinessNavigationIte
     { label: 'Fichas Pacientes', path: '/contacts', icon: 'UserSquare' },
   ],
   supermarket: [
-    { label: 'Dashboard', path: '/dashboard', icon: 'LayoutDashboard' },
-    { label: 'Ventas Caja (POS)', path: '/pos', icon: 'DollarSign' },
-    { label: 'Inventario / Góndola', path: '/inventory', icon: 'Package' },
-    { label: 'Fidelización Clientes', path: '/contacts', icon: 'Users' },
+    { label: 'Resumen', path: '/rubros/supermarket', icon: 'LayoutDashboard' },
+    { label: 'Caja POS', path: '/rubros/supermarket#pos', icon: 'DollarSign' },
+    { label: 'Catálogo', path: '/rubros/supermarket#catalog', icon: 'Package' },
+    { label: 'Stock', path: '/rubros/supermarket#inventory', icon: 'Grid' },
+    { label: 'Lotes', path: '/rubros/supermarket#lots', icon: 'Clock' },
   ],
   hardware_store: [
-    { label: 'Dashboard', path: '/dashboard', icon: 'LayoutDashboard' },
-    { label: 'Mostrador POS', path: '/pos', icon: 'DollarSign' },
-    { label: 'Inventario (Ferretería)', path: '/inventory', icon: 'HardHat' },
-    { label: 'Proveedores Ferreteros', path: '/contacts', icon: 'Building' },
+    { label: 'Resumen', path: '/rubros/hardware_store', icon: 'LayoutDashboard' },
+    { label: 'Mostrador', path: '/rubros/hardware_store#operation', icon: 'DollarSign' },
+    { label: 'Catálogo', path: '/rubros/hardware_store#catalog', icon: 'HardHat' },
+    { label: 'Stock', path: '/rubros/hardware_store#stock', icon: 'Grid' },
+    { label: 'Proveedores', path: '/rubros/hardware_store#suppliers', icon: 'Building' },
   ],
   automotive: [
-    { label: 'Dashboard', path: '/dashboard', icon: 'LayoutDashboard' },
-    { label: 'Orden de Reparación', path: '/appointments', icon: 'Wrench' },
-    { label: 'Repuestos & POS', path: '/pos', icon: 'DollarSign' },
-    { label: 'Catálogo de Autopartes', path: '/products', icon: 'Settings' },
+    { label: 'Resumen', path: '/rubros/automotive', icon: 'LayoutDashboard' },
+    { label: 'Taller', path: '/rubros/automotive#workshop', icon: 'Wrench' },
+    { label: 'Repuestos', path: '/rubros/automotive#parts', icon: 'Settings' },
+    { label: 'Inspecciones', path: '/rubros/automotive#inspections', icon: 'FileCheck' },
+    { label: 'Mantenimiento', path: '/rubros/automotive#maintenance', icon: 'Calendar' },
   ],
   beauty_salon: [
-    { label: 'Dashboard', path: '/dashboard', icon: 'LayoutDashboard' },
-    { label: 'Turnos Estilistas', path: '/appointments', icon: 'Calendar' },
-    { label: 'Servicios & POS', path: '/pos', icon: 'Scissors' },
-    { label: 'Clientes (Fichas)', path: '/contacts', icon: 'Users' },
+    { label: 'Resumen', path: '/rubros/beauty_salon', icon: 'LayoutDashboard' },
+    { label: 'Agenda', path: '/rubros/beauty_salon#agenda', icon: 'Calendar' },
+    { label: 'Servicios', path: '/rubros/beauty_salon#services', icon: 'Scissors' },
+    { label: 'Productos', path: '/rubros/beauty_salon#products', icon: 'Package' },
+    { label: 'Equipo', path: '/rubros/beauty_salon#team', icon: 'Users' },
   ],
   gym: [
     { label: 'Dashboard', path: '/dashboard', icon: 'LayoutDashboard' },
@@ -383,6 +389,13 @@ export const BUSINESS_NAVIGATION: Record<BusinessTypeCode, BusinessNavigationIte
   ],
 };
 
+export const BUSINESS_CONTEXT_MODULES: Record<ContextualModuleCode, readonly BusinessTypeCode[]> = {
+  appointments: ['healthcare', 'automotive', 'beauty_salon', 'professional_services', 'pet_shop', 'real_estate', 'hotel_hospitality', 'education'],
+  products: ['gastronomy', 'retail_apparel', 'supermarket', 'hardware_store', 'automotive', 'beauty_salon', 'electronics', 'pet_shop', 'real_estate'],
+  inventory: ['gastronomy', 'retail_apparel', 'supermarket', 'hardware_store', 'automotive', 'beauty_salon', 'gym', 'electronics', 'pet_shop', 'laundry_dryclean'],
+  contacts: ['gastronomy', 'retail_apparel', 'healthcare', 'supermarket', 'hardware_store', 'automotive', 'beauty_salon', 'gym', 'professional_services', 'pet_shop', 'real_estate', 'hotel_hospitality', 'education', 'laundry_dryclean'],
+};
+
 export function isBusinessTypeCode(code: string): code is BusinessTypeCode {
   return BUSINESS_TYPES.some((businessType) => businessType.code === code);
 }
@@ -392,20 +405,28 @@ export function resolveBusinessTypeCode(code: string | string[] | null | undefin
   return value && isBusinessTypeCode(value) ? value : undefined;
 }
 
-export function getBusinessType(code: string | null | undefined): BusinessTypeDefinition {
-  return BUSINESS_TYPES.find((businessType) => businessType.code === code) ?? BUSINESS_TYPES[0];
+export function getBusinessType(code: BusinessTypeCode): BusinessTypeDefinition {
+  const businessType = BUSINESS_TYPES.find((candidate) => candidate.code === code);
+  if (!businessType) throw new Error(`Business type is not registered: ${code}`);
+  return businessType;
 }
 
-export function getBusinessModules(code: string | null | undefined): BusinessModuleDefinition[] {
-  const businessType = getBusinessType(code);
-  return BUSINESS_MODULES[businessType.code];
+export function getBusinessModules(code: BusinessTypeCode): BusinessModuleDefinition[] {
+  return BUSINESS_MODULES[code];
 }
 
-export function getBusinessNavigation(code: string | null | undefined): BusinessNavigationItem[] {
-  const businessType = getBusinessType(code);
-  return BUSINESS_NAVIGATION[businessType.code];
+export function getBusinessModuleCount(code: BusinessTypeCode): number {
+  return getBusinessModules(code).length;
 }
 
-export function getActivatedModuleCodes(code: string | null | undefined): string[] {
+export function getBusinessNavigation(code: BusinessTypeCode): BusinessNavigationItem[] {
+  return BUSINESS_NAVIGATION[code];
+}
+
+export function getActivatedModuleCodes(code: BusinessTypeCode): string[] {
   return getBusinessType(code).activatedModules;
+}
+
+export function isContextualModuleSupported(code: BusinessTypeCode, module: ContextualModuleCode): boolean {
+  return BUSINESS_CONTEXT_MODULES[module].includes(code);
 }

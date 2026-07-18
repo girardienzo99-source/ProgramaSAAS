@@ -9,6 +9,7 @@ import {
   CalendarClock,
   Camera,
   ClipboardCheck,
+  Gift,
   Image as ImageIcon,
   LayoutGrid,
   MapPin,
@@ -29,8 +30,9 @@ import SupermarketConsole, {
   type SupermarketProduct,
   type SupermarketSaleResult,
 } from './SupermarketConsole';
+import SupermarketLoyaltyConsole from './SupermarketLoyaltyConsole';
 
-type Area = 'pos' | 'catalog' | 'inventory' | 'purchases' | 'lots' | 'operations' | 'layout';
+type Area = 'pos' | 'catalog' | 'inventory' | 'purchases' | 'lots' | 'operations' | 'layout' | 'loyalty';
 type ProductFilter = 'all' | 'active' | 'paused' | 'low' | 'expiring';
 type PurchaseStatus = 'draft' | 'ordered' | 'received';
 
@@ -185,7 +187,7 @@ export default function SupermarketWorkspaceConsole() {
   useEffect(() => {
     const sync = () => {
       const hash = window.location.hash.slice(1) as Area;
-      if (['pos', 'catalog', 'inventory', 'purchases', 'lots', 'operations', 'layout'].includes(hash)) setArea(hash);
+      if (['pos', 'catalog', 'inventory', 'purchases', 'lots', 'operations', 'layout', 'loyalty'].includes(hash)) setArea(hash);
     };
     sync();
     window.addEventListener('hashchange', sync);
@@ -491,12 +493,13 @@ export default function SupermarketWorkspaceConsole() {
 
   const tabs: Array<{ id: Area; label: string; icon: typeof ShoppingCart }> = [
     { id: 'pos', label: 'Caja POS', icon: ShoppingCart },
-    { id: 'catalog', label: 'Catalogo y precios', icon: Barcode },
-    { id: 'inventory', label: 'Stock y reposicion', icon: Boxes },
+    { id: 'catalog', label: 'Catalogo', icon: Barcode },
+    { id: 'inventory', label: 'Stock', icon: Boxes },
     { id: 'purchases', label: 'Compras', icon: Truck },
-    { id: 'lots', label: 'Lotes y vencimientos', icon: CalendarClock },
-    { id: 'operations', label: 'Control operativo', icon: ClipboardCheck },
-    { id: 'layout', label: 'Gondolas y etiquetas', icon: LayoutGrid },
+    { id: 'lots', label: 'Lotes', icon: CalendarClock },
+    { id: 'operations', label: 'Control', icon: ClipboardCheck },
+    { id: 'layout', label: 'Gondolas', icon: LayoutGrid },
+    { id: 'loyalty', label: 'Fidelizacion', icon: Gift },
   ];
 
   return (
@@ -567,6 +570,8 @@ export default function SupermarketWorkspaceConsole() {
         onCreateLabels={createLabelJob}
         onMarkPrinted={markLabelJobPrinted}
       />}
+
+      {area === 'loyalty' && <SupermarketLoyaltyConsole />}
 
       {editingProduct && <ProductEditor product={editingProduct} setProduct={setEditingProduct} onImage={uploadImage} onSave={saveProduct} onClose={() => setEditingProduct(null)} />}
       {editingPurchase && <PurchaseEditor purchase={editingPurchase} setPurchase={setEditingPurchase} products={products} onSave={savePurchase} onClose={() => setEditingPurchase(null)} />}

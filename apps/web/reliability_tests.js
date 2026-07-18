@@ -419,6 +419,46 @@ test('supermercado organiza gondolas y congela etiquetas auditables', () => {
   assert.match(config, /supermarket#layout/);
 });
 
+test('supermercado persiste fidelizacion, campanas y canjes sin cruzar rubros', () => {
+  const migration = fs.readFileSync(
+    path.join(__dirname, '../../packages/database/supabase/migrations/20260718000027_supermarket_loyalty.sql'),
+    'utf8',
+  );
+  const workspace = fs.readFileSync(path.join(__dirname, 'src/components/supermarket/SupermarketWorkspaceConsole.tsx'), 'utf8');
+  const loyalty = fs.readFileSync(path.join(__dirname, 'src/components/supermarket/SupermarketLoyaltyConsole.tsx'), 'utf8');
+  const config = fs.readFileSync(path.join(__dirname, 'src/config/businessTypes.ts'), 'utf8');
+  const repository = fs.readFileSync(path.join(__dirname, 'src/lib/api/supermarketLoyaltyRepository.ts'), 'utf8');
+  const customerRoute = fs.readFileSync(path.join(__dirname, 'src/app/api/rubros/supermarket/loyalty/customers/route.ts'), 'utf8');
+  const campaignRoute = fs.readFileSync(path.join(__dirname, 'src/app/api/rubros/supermarket/loyalty/campaigns/route.ts'), 'utf8');
+  const rewardRoute = fs.readFileSync(path.join(__dirname, 'src/app/api/rubros/supermarket/loyalty/rewards/route.ts'), 'utf8');
+  const movementRoute = fs.readFileSync(path.join(__dirname, 'src/app/api/rubros/supermarket/loyalty/movements/route.ts'), 'utf8');
+
+  ['supermarket_loyalty_customers', 'supermarket_loyalty_campaigns', 'supermarket_loyalty_rewards', 'supermarket_loyalty_movements'].forEach((table) => {
+    assert.match(migration, new RegExp(`CREATE TABLE IF NOT EXISTS public\\.${table}`));
+  });
+  ['supermarket_list_loyalty_customers', 'supermarket_save_loyalty_customer', 'supermarket_list_loyalty_campaigns', 'supermarket_save_loyalty_campaign', 'supermarket_list_loyalty_rewards', 'supermarket_save_loyalty_reward', 'supermarket_list_loyalty_movements', 'supermarket_credit_loyalty_purchase', 'supermarket_redeem_loyalty_reward', 'supermarket_adjust_loyalty_points'].forEach((fn) => {
+    assert.match(migration, new RegExp(`FUNCTION public\\.${fn}`));
+    assert.match(repository, new RegExp(`'${fn}'`));
+  });
+  assert.match(migration, /JOIN public\.modules m ON m\.code = 'loyalty'/);
+  assert.match(migration, /public\.jwt_business_type\(\) = 'supermarket'/);
+  assert.match(migration, /pg_advisory_xact_lock/g);
+  assert.match(migration, /INSUFFICIENT_LOYALTY_POINTS/);
+  assert.match(migration, /LOYALTY_REWARD_OUT_OF_STOCK/);
+  assert.match(migration, /UNIQUE\(company_id, idempotency_key\)/);
+  assert.match(customerRoute, /supermarket\.loyalty\.customers\.write/);
+  assert.match(campaignRoute, /supermarket\.loyalty\.campaigns\.manage/);
+  assert.match(rewardRoute, /supermarket\.loyalty\.rewards\.manage/);
+  assert.ok(movementRoute.indexOf('resolveTenantContext(request)') < movementRoute.indexOf('readJsonObject(request)'));
+  assert.match(movementRoute, /supermarket\.loyalty\.points\.earn/);
+  assert.match(movementRoute, /supermarket\.loyalty\.points\.redeem/);
+  assert.match(movementRoute, /supermarket\.loyalty\.points\.adjust/);
+  assert.match(workspace, /SupermarketLoyaltyConsole/);
+  assert.doesNotMatch(workspace, /products\/LoyaltyConsole/);
+  assert.match(loyalty, /uploadCatalogImage/);
+  assert.match(config, /supermarket#loyalty/);
+});
+
 test('supermercado persiste catalogo, compras y lotes con recepcion atomica', () => {
   const migration = fs.readFileSync(
     path.join(__dirname, '../../packages/database/supabase/migrations/20260718000023_supermarket_domain.sql'),

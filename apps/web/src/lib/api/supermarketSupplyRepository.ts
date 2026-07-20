@@ -81,6 +81,27 @@ export interface SupermarketPurchaseApprovalPolicy {
 }
 
 export type SupermarketPurchaseApprovalStatus = 'pending' | 'approved' | 'auto_approved' | 'rejected';
+export type SupermarketEdiStatus = 'pending' | 'processing' | 'sent' | 'failed' | 'dead_letter';
+
+export interface SupermarketEdiMessageRecord {
+  id: string;
+  eventType: 'DESADV' | 'RECADV' | 'COMDIS';
+  standard: string;
+  status: SupermarketEdiStatus;
+  retryCount: number;
+  lastError: string;
+  availableAt: string;
+  nextRetryAt: string;
+  sentAt: string | null;
+  lockedAt: string | null;
+  destinationEndpoint: string;
+  deliveredReference: string;
+  sourceType: 'shipment' | 'receipt' | 'claim' | 'unknown';
+  sourceLabel: string;
+  payload: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
 
 export interface SupermarketPurchaseApprovalRecord {
   id: string;
@@ -107,16 +128,18 @@ interface LocalSupplyState {
   approvalPolicies: Map<string, SupermarketPurchaseApprovalPolicy>;
   approvals: Map<string, LocalApproval[]>;
   approvalResults: Map<string, { requestId: string; status: SupermarketPurchaseApprovalStatus; requiredApprovals: number; duplicate: boolean }>;
+  ediMessages: Map<string, SupermarketEdiMessageRecord[]>;
 }
 
 const globalWithSupply = globalThis as typeof globalThis & { __programaSassSupermarketSupply?: LocalSupplyState };
 const localState: LocalSupplyState = globalWithSupply.__programaSassSupermarketSupply ?? {
   suppliers: new Map(), documents: new Map(), documentResults: new Map(),
-  approvalPolicies: new Map(), approvals: new Map(), approvalResults: new Map(),
+  approvalPolicies: new Map(), approvals: new Map(), approvalResults: new Map(), ediMessages: new Map(),
 };
 localState.approvalPolicies ??= new Map();
 localState.approvals ??= new Map();
 localState.approvalResults ??= new Map();
+localState.ediMessages ??= new Map();
 globalWithSupply.__programaSassSupermarketSupply = localState;
 
 function productionBranch(context: SupermarketContext): string {
@@ -174,6 +197,41 @@ function mapApproval(item: Record<string, unknown>): SupermarketPurchaseApproval
     requestedBy: String(item.requested_by), requestedAt: String(item.requested_at),
     resolvedAt: item.resolved_at ? String(item.resolved_at) : null, canDecide: item.can_decide === true,
   };
+}
+
+function mapEdiMessage(item: Record<string, unknown>): SupermarketEdiMessageRecord {
+  return {
+    id: String(item.id), eventType: item.event_type as SupermarketEdiMessageRecord['eventType'],
+    standard: String(item.standard ?? 'EANCOM_D01B'), status: item.status as SupermarketEdiStatus,
+    retryCount: Number(item.retry_count ?? 0), lastError: String(item.last_error ?? ''),
+    availableAt: String(item.available_at ?? ''), nextRetryAt: String(item.next_retry_at ?? item.available_at ?? ''),
+    sentAt: item.sent_at ? String(item.sent_at) : null, lockedAt: item.locked_at ? String(item.locked_at) : null,
+    destinationEndpoint: String(item.destination_endpoint ?? ''),
+    deliveredReference: String(item.delivered_reference ?? ''),
+    sourceType: String(item.source_type ?? 'unknown') as SupermarketEdiMessageRecord['sourceType'],
+    sourceLabel: String(item.source_label ?? item.idempotency_key ?? item.id),
+    payload: item.payload && typeof item.payload === 'object' && !Array.isArray(item.payload)
+      ? item.payload as Record<string, unknown> : {},
+    createdAt: String(item.created_at ?? ''), updatedAt: String(item.updated_at ?? item.created_at ?? ''),
+  };
+}
+
+function seedLocalEdiMessages(context: SupermarketContext): SupermarketEdiMessageRecord[] {
+  const key = branchKey(context);
+  const current = localState.ediMessages.get(key);
+  if (current) return current;
+  const now = new Date().toISOString();
+  const seeded: SupermarketEdiMessageRecord[] = [
+    {
+      id: `edi-${crypto.randomUUID()}`, eventType: 'DESADV', standard: 'EANCOM_D01B',
+      status: 'pending', retryCount: 0, lastError: '', availableAt: now, nextRetryAt: now,
+      sentAt: null, lockedAt: null, destinationEndpoint: '', deliveredReference: '',
+      sourceType: 'shipment', sourceLabel: 'ASN demo local',
+      payload: { messageType: 'DESADV', mode: 'local' }, createdAt: now, updatedAt: now,
+    },
+  ];
+  localState.ediMessages.set(key, seeded);
+  return seeded;
 }
 
 export async function listSupermarketSuppliers(context: SupermarketContext): Promise<SupermarketSupplierRecord[]> {
@@ -434,4 +492,61 @@ export async function decideSupermarketPurchaseApproval(
   localState.approvals.set(key, current.map((item) => item.id === requestId ? updated : item));
   if (status === 'approved') await setLocalPurchaseOrdered(context, approval.orderId);
   return { requestId, status, approvalCount, duplicate: false };
+}
+
+export async function listSupermarketEdiMessages(
+  context: SupermarketContext,
+  status?: SupermarketEdiStatus,
+): Promise<SupermarketEdiMessageRecord[]> {
+  if (isServerSupabaseAdminConfigured) {
+    const { data, error } = await createAdminServerClient().rpc('supermarket_list_edi_outbox', {
+      p_company_id: context.companyId, p_branch_id: productionBranch(context), p_status: status ?? null,
+    });
+    if (error?.message.includes('INVALID_EDI_STATUS')) throw new ApiError(400, 'El estado EDI no es valido.', 'INVALID_EDI_STATUS');
+    if (error) throw new ApiError(503, 'No se pudo consultar la cola EDI.', 'SUPERMARKET_EDI_UNAVAILABLE');
+    return ((data ?? []) as Array<Record<string, unknown>>).map(mapEdiMessage);
+  }
+  if (process.env.NODE_ENV === 'production') persistenceUnavailable();
+  return seedLocalEdiMessages(context).filter((item) => !status || item.status === status).map((item) => ({ ...item, payload: { ...item.payload } }));
+}
+
+export function summarizeSupermarketEdiMessages(items: SupermarketEdiMessageRecord[]) {
+  const now = Date.now();
+  return {
+    total: items.length,
+    pending: items.filter((item) => item.status === 'pending').length,
+    processing: items.filter((item) => item.status === 'processing').length,
+    sent: items.filter((item) => item.status === 'sent').length,
+    failed: items.filter((item) => item.status === 'failed').length,
+    deadLetter: items.filter((item) => item.status === 'dead_letter').length,
+    readyToRetry: items.filter((item) => (item.status === 'pending' || item.status === 'failed') && new Date(item.nextRetryAt || item.availableAt).getTime() <= now).length,
+  };
+}
+
+export async function retrySupermarketEdiMessage(
+  context: SupermarketContext,
+  messageId: string,
+  reason: string,
+) {
+  if (isServerSupabaseAdminConfigured) {
+    if (!isUuid(messageId)) throw new ApiError(400, 'El mensaje EDI no es valido.', 'INVALID_EDI_MESSAGE_ID');
+    const { data, error } = await createAdminServerClient().rpc('supermarket_retry_edi_message', {
+      p_company_id: context.companyId, p_branch_id: productionBranch(context), p_user_id: context.userId,
+      p_message_id: messageId, p_reason: reason,
+    });
+    if (error?.message.includes('EDI_MESSAGE_NOT_FOUND')) throw new ApiError(404, 'El mensaje EDI no existe.', 'EDI_MESSAGE_NOT_FOUND');
+    if (error?.message.includes('EDI_MESSAGE_ALREADY_SENT')) throw new ApiError(409, 'El mensaje ya fue enviado.', 'EDI_MESSAGE_ALREADY_SENT');
+    if (error) throw new ApiError(503, 'No se pudo reintentar el mensaje EDI.', 'SUPERMARKET_EDI_UNAVAILABLE');
+    return data as { messageId: string; status: SupermarketEdiStatus; retryCount: number };
+  }
+  if (process.env.NODE_ENV === 'production') persistenceUnavailable();
+  const key = branchKey(context);
+  const current = seedLocalEdiMessages(context);
+  const message = current.find((item) => item.id === messageId);
+  if (!message) throw new ApiError(404, 'El mensaje EDI no existe.', 'EDI_MESSAGE_NOT_FOUND');
+  if (message.status === 'sent') throw new ApiError(409, 'El mensaje ya fue enviado.', 'EDI_MESSAGE_ALREADY_SENT');
+  const now = new Date().toISOString();
+  const updated = { ...message, status: 'pending' as const, lastError: reason || message.lastError, availableAt: now, nextRetryAt: now, lockedAt: null, updatedAt: now };
+  localState.ediMessages.set(key, current.map((item) => item.id === messageId ? updated : item));
+  return { messageId, status: updated.status, retryCount: updated.retryCount };
 }

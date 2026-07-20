@@ -27,6 +27,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { apiFetch } from '@/lib/client/apiFetch';
+import SupermarketEdiOutboxConsole from './SupermarketEdiOutboxConsole';
 import SupermarketSupplierClaimsConsole from './SupermarketSupplierClaimsConsole';
 import type {
   SupermarketSupplierDocumentRecord,
@@ -40,7 +41,7 @@ import type {
   SupermarketSupplierShipmentRecord,
 } from '@/lib/api/supermarketSupplierPortalRepository';
 
-type View = 'forecast' | 'suppliers' | 'accounts' | 'approvals' | 'portal' | 'claims';
+type View = 'forecast' | 'suppliers' | 'accounts' | 'approvals' | 'portal' | 'claims' | 'edi';
 interface ProductOption { id: string; name: string; cost: number }
 interface PurchaseOption { id: string; supplier: string; productId: string; quantity: number; unitCost: number; status: string }
 interface PurchaseInput { supplier: string; productId: string; quantity: number; unitCost: number; expectedDate: string; status: 'draft'; lotCode: string; expirationDate: string }
@@ -197,7 +198,7 @@ export default function SupermarketSupplyConsole({ products, purchases, onCreate
   };
 
   const tabs: Array<{ id: View; label: string; icon: typeof Gauge }> = [
-    { id: 'forecast', label: 'Reposicion', icon: Gauge }, { id: 'suppliers', label: 'Proveedores', icon: Building2 }, { id: 'accounts', label: 'Conciliacion', icon: ClipboardList }, { id: 'approvals', label: 'Aprobaciones', icon: ShieldCheck }, { id: 'portal', label: 'Portal', icon: KeyRound }, { id: 'claims', label: 'Reclamos', icon: AlertTriangle },
+    { id: 'forecast', label: 'Reposicion', icon: Gauge }, { id: 'suppliers', label: 'Proveedores', icon: Building2 }, { id: 'accounts', label: 'Conciliacion', icon: ClipboardList }, { id: 'approvals', label: 'Aprobaciones', icon: ShieldCheck }, { id: 'portal', label: 'Portal', icon: KeyRound }, { id: 'claims', label: 'Reclamos', icon: AlertTriangle }, { id: 'edi', label: 'EDI', icon: Send },
   ];
   const matchingOrders = purchases.filter((purchase) => !documentDraft.supplierId || purchase.supplier.toLowerCase() === suppliers.find((item) => item.id === documentDraft.supplierId)?.name.toLowerCase());
 
@@ -229,6 +230,7 @@ export default function SupermarketSupplyConsole({ products, purchases, onCreate
     </div>}
 
     {view === 'claims' && <SupermarketSupplierClaimsConsole />}
+    {view === 'edi' && <SupermarketEdiOutboxConsole />}
 
     {editingSupplier && <Modal title={editingSupplier.id ? 'Editar proveedor' : 'Nuevo proveedor'} onClose={() => setEditingSupplier(null)} footer={<><Secondary onClick={() => setEditingSupplier(null)}>Cancelar</Secondary><Primary onClick={() => void saveSupplier()} disabled={!editingSupplier.name.trim()}>Guardar</Primary></>}><div className="grid gap-4 sm:grid-cols-2"><Text label="Nombre" value={editingSupplier.name} set={(value) => setEditingSupplier({ ...editingSupplier, name: value })} wide /><Text label="CUIT" value={editingSupplier.taxId} set={(value) => setEditingSupplier({ ...editingSupplier, taxId: value })} /><Text label="Telefono" value={editingSupplier.phone} set={(value) => setEditingSupplier({ ...editingSupplier, phone: value })} /><Text label="Email" value={editingSupplier.email} set={(value) => setEditingSupplier({ ...editingSupplier, email: value })} /><Text label="Direccion" value={editingSupplier.address} set={(value) => setEditingSupplier({ ...editingSupplier, address: value })} /><NumberField label="Dias de entrega" value={editingSupplier.leadDays} set={(value) => setEditingSupplier({ ...editingSupplier, leadDays: Math.max(0, Number(value)) })} /><NumberField label="Limite de credito" value={editingSupplier.creditLimit} set={(value) => setEditingSupplier({ ...editingSupplier, creditLimit: Math.max(0, Number(value)) })} /></div></Modal>}
 

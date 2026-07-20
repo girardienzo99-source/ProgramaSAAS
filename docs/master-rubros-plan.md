@@ -115,7 +115,7 @@ Todos los rubros deben resolver, cuando corresponda:
 
 **Flujos criticos:** escanear, validar promocion, cobrar, descontar lote, reponer gondola, recibir compra y conciliar caja sin permitir stock negativo no autorizado.
 
-**Estado implementado:** catalogo e imagenes, precios y promociones, stock, compras, recepcion atomica, lotes FEFO, apertura y cierre de caja, ventas POS idempotentes, devoluciones auditadas, conteos ciclicos, mermas, transferencias entre sucursales y precios masivos. Los comprobantes internos permanecen pendientes de autorizacion ARCA y no inventan estado fiscal.
+**Estado implementado:** catalogo e imagenes, precios y promociones, stock, compras, recepcion atomica, lotes FEFO, apertura y cierre de caja, ventas POS idempotentes, devoluciones auditadas, conteos ciclicos, mermas, transferencias entre sucursales, precios masivos, proveedores, aprobaciones, portal externo, ASN, recepciones parciales, reclamos automaticos y consola EDI con reintentos/dead-letter. Los comprobantes internos permanecen pendientes de autorizacion ARCA y no inventan estado fiscal.
 
 ### 5. Ferreteria y materiales
 

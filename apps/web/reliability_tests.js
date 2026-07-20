@@ -734,6 +734,39 @@ test('supermercado abre y resuelve reclamos de recepcion con auditoria y COMDIS'
   assert.doesNotMatch(supplierPortal, /localStorage|sessionStorage|document\.cookie/);
 });
 
+test('supermercado opera EDI con reintentos, alertas y dead letter', () => {
+  const migration = fs.readFileSync(
+    path.join(__dirname, '../../packages/database/supabase/migrations/20260719000036_supermarket_edi_operations.sql'),
+    'utf8',
+  );
+  const repository = fs.readFileSync(path.join(__dirname, 'src/lib/api/supermarketSupplyRepository.ts'), 'utf8');
+  const route = fs.readFileSync(path.join(__dirname, 'src/app/api/rubros/supermarket/edi-outbox/route.ts'), 'utf8');
+  const console = fs.readFileSync(path.join(__dirname, 'src/components/supermarket/SupermarketEdiOutboxConsole.tsx'), 'utf8');
+  const supply = fs.readFileSync(path.join(__dirname, 'src/components/supermarket/SupermarketSupplyConsole.tsx'), 'utf8');
+
+  assert.match(migration, /supermarket\.edi\.manage/);
+  assert.match(migration, /status IN \('pending', 'processing', 'sent', 'failed', 'dead_letter'\)/);
+  assert.match(migration, /next_retry_at/);
+  assert.match(migration, /delivered_reference/);
+  assert.match(migration, /supermarket_list_edi_outbox/);
+  assert.match(migration, /supermarket_retry_edi_message/);
+  assert.match(migration, /supermarket_record_edi_delivery/);
+  assert.match(migration, /GRANT EXECUTE ON FUNCTION public\.supermarket_retry_edi_message/);
+  assert.match(migration, /public\.supermarket_assert_scope\(p_company_id, p_branch_id\)/g);
+  assert.match(repository, /listSupermarketEdiMessages/);
+  assert.match(repository, /summarizeSupermarketEdiMessages/);
+  assert.match(repository, /retrySupermarketEdiMessage/);
+  assert.match(route, /supermarket\.edi\.read/);
+  assert.match(route, /supermarket\.edi\.manage/);
+  assert.ok(route.indexOf('authorizeRequest(request') < route.indexOf('readJsonObject(request)'));
+  assert.match(console, /Mensajeria EDI/);
+  assert.match(console, /Listos retry/);
+  assert.match(console, /Bloqueados/);
+  assert.match(console, /Reintentar/);
+  assert.match(supply, /id: 'edi'/);
+  assert.match(supply, /SupermarketEdiOutboxConsole/);
+});
+
 test('supermercado persiste catalogo, compras y lotes con recepcion atomica', () => {
   const migration = fs.readFileSync(
     path.join(__dirname, '../../packages/database/supabase/migrations/20260718000023_supermarket_domain.sql'),

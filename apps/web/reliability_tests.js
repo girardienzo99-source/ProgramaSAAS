@@ -1145,3 +1145,15 @@ test('modulos sensibles no muestran certificaciones, dosis ni enlaces publicos s
   assert.doesNotMatch(electronics, /programa-saas\.vercel\.app\/rma-tracking/);
   assert.match(electronics, /No se contrató ni cobró una cobertura/);
 });
+
+test('infraestructura enterprise multi-tenant aisla cache L1 y outbox por empresa', () => {
+  const cacheManagerSource = fs.readFileSync(path.join(__dirname, 'src/lib/api/cacheManager.ts'), 'utf8');
+  const outboxSource = fs.readFileSync(path.join(__dirname, 'src/lib/api/eventOutboxRepository.ts'), 'utf8');
+
+  assert.match(cacheManagerSource, /companyId/);
+  assert.match(cacheManagerSource, /invalidateByTag/);
+  assert.match(cacheManagerSource, /clearCompanyCache/);
+  assert.match(outboxSource, /eventType/);
+  assert.match(outboxSource, /markCompleted/);
+  assert.match(outboxSource, /markFailed/);
+});

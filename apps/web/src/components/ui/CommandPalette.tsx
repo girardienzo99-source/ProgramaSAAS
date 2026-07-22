@@ -1,7 +1,11 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Boxes, LayoutDashboard, PackageSearch, Search, Shield, ShoppingCart, Users, X } from 'lucide-react';
+import { 
+  Boxes, LayoutDashboard, PackageSearch, Search, Shield, ShoppingCart, Users, X, Receipt,
+  Utensils, ShoppingBag, Stethoscope, Car, Dumbbell, Dog, Shirt, Home, GraduationCap,
+  Hotel, Scissors, Briefcase, Cpu, Wrench, Sparkles
+} from 'lucide-react';
 
 interface CommandPaletteProps {
   isOpen: boolean;
@@ -10,12 +14,27 @@ interface CommandPaletteProps {
 }
 
 const commands = [
-  { label: 'Ir al resumen', route: '/dashboard', icon: LayoutDashboard },
-  { label: 'Nueva venta', route: '/pos', icon: ShoppingCart },
-  { label: 'Consultar catálogo', route: '/products', icon: PackageSearch },
-  { label: 'Revisar inventario', route: '/inventory', icon: Boxes },
-  { label: 'Abrir contactos', route: '/contacts', icon: Users },
-  { label: 'Control de plataforma', route: '/admin-portal', icon: Shield },
+  { label: 'Ir al resumen BI & Estadísticas', route: '/dashboard', icon: LayoutDashboard },
+  { label: 'Punto de Venta POS Universal', route: '/pos', icon: ShoppingCart },
+  { label: 'Facturación Electrónica ARCA', route: '/billing', icon: Receipt },
+  { label: 'Catálogo de Productos', route: '/products', icon: PackageSearch },
+  { label: 'Control de Stock e Inventario', route: '/inventory', icon: Boxes },
+  { label: 'Espacio Gastronomía (Salón / KDS)', route: '/rubros/gastronomy', icon: Utensils },
+  { label: 'Espacio Supermercados & Góndolas', route: '/rubros/supermarket', icon: ShoppingBag },
+  { label: 'Espacio Salud & Historia Clínica', route: '/rubros/healthcare', icon: Stethoscope },
+  { label: 'Espacio Taller Mecánico & Mantenimiento', route: '/rubros/automotive', icon: Car },
+  { label: 'Espacio Gimnasios & Socios', route: '/rubros/gym', icon: Dumbbell },
+  { label: 'Espacio Veterinaria & Pet Shop', route: '/rubros/pet_shop', icon: Dog },
+  { label: 'Espacio Lavandería & Tintorería', route: '/rubros/laundry_dryclean', icon: Shirt },
+  { label: 'Espacio Inmobiliaria & Alquileres', route: '/rubros/real_estate', icon: Home },
+  { label: 'Espacio Educación & Academias', route: '/rubros/education', icon: GraduationCap },
+  { label: 'Espacio Hotelería & Reservas', route: '/rubros/hotel_hospitality', icon: Hotel },
+  { label: 'Espacio Estética & Peluquerías', route: '/rubros/beauty_salon', icon: Scissors },
+  { label: 'Espacio Servicios Profesionales', route: '/rubros/professional_services', icon: Briefcase },
+  { label: 'Espacio Reparación de Electrónica', route: '/rubros/electronics', icon: Cpu },
+  { label: 'Espacio Ferretería & Corralón', route: '/rubros/hardware_store', icon: Wrench },
+  { label: 'Espacio Moda & Probador Virtual', route: '/rubros/retail_apparel', icon: Sparkles },
+  { label: 'Control de Plataforma & Auditoría', route: '/admin-portal', icon: Shield },
 ];
 
 export function CommandPalette({ isOpen, onClose, onNavigate }: CommandPaletteProps) {

@@ -11,6 +11,7 @@ const publicStoreModule = import(pathToFileURL(path.join(__dirname, 'src/lib/api
 const permissionRulesModule = import(pathToFileURL(path.join(__dirname, 'src/lib/api/permissionRules.ts')).href);
 const imageRulesModule = import(pathToFileURL(path.join(__dirname, 'src/lib/api/imageRules.ts')).href);
 const businessTypesModule = import(pathToFileURL(path.join(__dirname, 'src/config/businessTypes.ts')).href);
+const operationalCalculationsModule = import(pathToFileURL(path.join(__dirname, 'src/lib/domain/operationalCalculations.ts')).href);
 
 test('readJsonObject acepta objetos JSON', async () => {
   const { readJsonObject } = await coreModule;
@@ -124,8 +125,8 @@ test('el registro de rubros es completo, estricto y no contiene rutas cruzadas',
     assert.equal(getBusinessType(code).code, code);
     assert.equal(getBusinessModuleCount(code), BUSINESS_MODULES[code].length);
     assert.ok(BUSINESS_MODULES[code].length >= 3, `${code} debe ofrecer al menos tres modulos`);
-    for (const module of BUSINESS_MODULES[code]) {
-      const routeBusinessType = module.path.match(/^\/rubros\/([^/?#]+)/)?.[1];
+    for (const businessModule of BUSINESS_MODULES[code]) {
+      const routeBusinessType = businessModule.path.match(/^\/rubros\/([^/?#]+)/)?.[1];
       assert.ok(!routeBusinessType || routeBusinessType === code, `${code} contiene una ruta hacia ${routeBusinessType}`);
     }
     for (const navigation of BUSINESS_NAVIGATION[code]) {
@@ -237,7 +238,7 @@ test('reservas gastronomicas evitan superposiciones y alimentan el salon digital
   assert.match(repository, /reservationOverlaps/);
   assert.match(salon, /Agenda de reservas/);
   assert.match(salon, /\/api\/rubros\/gastronomy\/reservations/);
-  assert.match(salon, /channel: chat\.extractedType === 'order' \? 'delivery' : 'takeaway'/);
+  assert.match(salon, /channel:\s*chat\.extractedType === ["']order["']\s*\?\s*["']delivery["']\s*:\s*["']takeaway["']/s);
   assert.doesNotMatch(salon, /const kdsId = `k-\$\{Date\.now\(\)\}`/);
   assert.match(config, /salonTab=reservations/);
 });
@@ -1005,7 +1006,7 @@ test('RBAC y storage quedan aislados por empresa y rubro', () => {
   assert.match(uploadRoute, /tenant\.companyId.*tenant\.businessTypeCode.*entity/s);
   internalRoutes.forEach((route) => {
     const source = fs.readFileSync(path.join(__dirname, route), 'utf8');
-    assert.match(source, /authorizeRequest\(request,/);
+    assert.match(source, /authorizeRequest\(\s*request,/);
   });
 });
 
@@ -1094,5 +1095,53 @@ test('reportes gastronomicos agregan ventas reales por empresa, sucursal y perio
   assert.match(consoleSource, /api\/rubros\/gastronomy\/reports/);
   assert.match(consoleSource, /Ventas por dia/);
   assert.doesNotMatch(consoleSource, /DAILY_SALES|TOP_PRODUCTS|Math\.random/);
-  assert.match(salon, /activeTab === 'reports'/);
+  assert.match(salon, /activeTab === ["']reports["']/);
+});
+
+test('EAN-13 de balanza valida checksum y separa PLU de peso', async () => {
+  const { decodeScaleEan13, isValidEan13 } = await operationalCalculationsModule;
+  assert.equal(isValidEan13('2000002001256'), true);
+  assert.equal(isValidEan13('2000002001257'), false);
+  assert.deepEqual(decodeScaleEan13('2000002001256'), {
+    prefix: '20',
+    productCode: '00002',
+    encodedValue: 125,
+  });
+  assert.equal(decodeScaleEan13('7791234567895'), null);
+});
+
+test('el plan de cortes respeta piezas fisicas y rechaza medidas imposibles', async () => {
+  const { calculateCutPlan } = await operationalCalculationsModule;
+  assert.deepEqual(calculateCutPlan(6, 4, 3), {
+    commercialPieces: 3,
+    cutsPerPiece: 1,
+    totalUsedMeters: 12,
+    totalScrapMeters: 6,
+  });
+  const compactPlan = calculateCutPlan(6, 2.4, 2);
+  assert.equal(compactPlan.commercialPieces, 1);
+  assert.equal(compactPlan.cutsPerPiece, 2);
+  assert.ok(Math.abs(compactPlan.totalScrapMeters - 1.2) < 0.000001);
+  assert.throws(() => calculateCutPlan(0, 2, 1), /mayor que cero/);
+  assert.throws(() => calculateCutPlan(3, 4, 1), /supera el largo comercial/);
+});
+
+test('notificaciones usan persistencia multiempresa y no simulan envios externos', () => {
+  const route = fs.readFileSync(path.join(__dirname, 'src/app/api/notifications/route.ts'), 'utf8');
+  const repository = fs.readFileSync(path.join(__dirname, 'src/lib/api/notificationRepository.ts'), 'utf8');
+  assert.match(repository, /from\(["']tenant_notifications["']\)/);
+  assert.match(repository, /eq\(["']company_id["'], context\.companyId\)/);
+  assert.match(repository, /process\.env\.NODE_ENV === ["']production["']/);
+  assert.match(route, /Notificación interna registrada/);
+  assert.doesNotMatch(route, /despachada|notificationsByCompany/);
+});
+
+test('modulos sensibles no muestran certificaciones, dosis ni enlaces publicos simulados', () => {
+  const healthcare = fs.readFileSync(path.join(__dirname, 'src/components/healthcare/HealthcareConsole.tsx'), 'utf8');
+  const pet = fs.readFileSync(path.join(__dirname, 'src/components/pet/PetConsole.tsx'), 'utf8');
+  const electronics = fs.readFileSync(path.join(__dirname, 'src/components/electronics/ElectronicsConsole.tsx'), 'utf8');
+  assert.doesNotMatch(healthcare, /Token SISA|SHA256-MED/);
+  assert.doesNotMatch(pet, /Cálculo Vete IA|\* 0\.1|\/ 10\)/);
+  assert.doesNotMatch(electronics, /programa-saas\.vercel\.app\/rma-tracking/);
+  assert.match(electronics, /No se contrató ni cobró una cobertura/);
 });

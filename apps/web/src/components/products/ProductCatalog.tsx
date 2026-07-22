@@ -516,6 +516,7 @@ export default function ProductCatalog() {
                 <div className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
                   <button 
                     onClick={() => handleDeleteProduct(p.id)}
+                    aria-label={`Eliminar ${p.name}`}
                     className="p-1.5 rounded-lg bg-slate-800 hover:bg-red-950/40 text-slate-455 hover:text-red-400 animate-pulse-once"
                   >
                     <Trash2 className="h-3.5 w-3.5" />

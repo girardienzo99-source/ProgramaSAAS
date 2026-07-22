@@ -59,6 +59,17 @@ Este documento registra el avance de mejora rubro por rubro. El patrón para cad
 | Educación / Academias | En progreso | Agenda y contactos contextualizan cursos y alumnos. | Persistir matrículas, cuotas, asistencia y calificaciones. |
 | Tintorería / Lavandería | En progreso | Inventario contextual abre recepción y seguimiento de prendas. | Persistir tickets, ciclos, pagos y trazabilidad por prenda. |
 
+## Endurecimiento operativo del 21 de julio de 2026
+
+- Salud y Veterinaria dejaron de mostrar firmas certificadas o dosis calculadas sin respaldo clínico.
+- Tecnología y Hotelería ya no confirman garantías, RMA público o llaves RFID que no fueron persistidos o enviados.
+- Supermercado valida checksum EAN-13, PLU exacto y peso antes de agregar productos de balanza.
+- Ferretería calcula cortes por pieza comercial física y rechaza largos, cantidades o divisiones inválidas.
+- Notificaciones usan `tenant_notifications` por empresa en producción y fallan explícitamente si la persistencia no está configurada.
+- El lint de Next 16 vuelve a ser ejecutable y las advertencias heredadas permanecen visibles sin ocultar errores bloqueantes.
+- Los botones de acciones críticas de Gastronomía, Indumentaria, Salud, Ferretería, Belleza, Veterinaria y Hotelería tienen nombre accesible.
+- La suite incorpora regresiones para EAN-13, cortes, persistencia de notificaciones y afirmaciones sensibles.
+
 ## Mapa de expansión funcional
 
 Este mapa guía las siguientes iteraciones. Cada submódulo debe compartir catálogo, inventario, clientes y movimientos con el resto del rubro.

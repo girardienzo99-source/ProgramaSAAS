@@ -132,7 +132,7 @@ export default function InventoryConsole() {
     }
 
     // Buscar o crear stock destino
-    let targetStock = stockList.find(s => s.branch_id === transferToBranch && s.product_id === transferProdId);
+    const targetStock = stockList.find(s => s.branch_id === transferToBranch && s.product_id === transferProdId);
 
     const updatedStock = stockList.map(s => {
       // Descontar origen

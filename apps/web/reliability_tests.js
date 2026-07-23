@@ -12,6 +12,7 @@ const permissionRulesModule = import(pathToFileURL(path.join(__dirname, 'src/lib
 const imageRulesModule = import(pathToFileURL(path.join(__dirname, 'src/lib/api/imageRules.ts')).href);
 const businessTypesModule = import(pathToFileURL(path.join(__dirname, 'src/config/businessTypes.ts')).href);
 const operationalCalculationsModule = import(pathToFileURL(path.join(__dirname, 'src/lib/domain/operationalCalculations.ts')).href);
+const predictiveAnalyticsModule = import(pathToFileURL(path.join(__dirname, 'src/lib/domain/predictiveAnalytics.ts')).href);
 
 test('readJsonObject acepta objetos JSON', async () => {
   const { readJsonObject } = await coreModule;
@@ -1156,4 +1157,21 @@ test('infraestructura enterprise multi-tenant aisla cache L1 y outbox por empres
   assert.match(outboxSource, /eventType/);
   assert.match(outboxSource, /markCompleted/);
   assert.match(outboxSource, /markFailed/);
+});
+
+test('motor de analitica predictiva detecta anomalias de caja, stock y proyecta ventas', async () => {
+  const { detectCashAnomaly, detectStockAnomaly, forecastSales30Days } = await predictiveAnalyticsModule;
+
+  const cashRes = detectCashAnomaly(100000, 85000);
+  assert.equal(cashRes.isAnomaly, true);
+  assert.equal(cashRes.difference, -15000);
+  assert.equal(cashRes.severity, 'critical');
+
+  const stockRes = detectStockAnomaly(10, 30);
+  assert.equal(stockRes.isAnomaly, true);
+  assert.equal(stockRes.alertType, 'excessive_consumption');
+
+  const forecast = forecastSales30Days([1000, 1200, 1100, 1300, 1500, 1400, 1600]);
+  assert.ok(forecast.projected30DaySales > 0);
+  assert.equal(forecast.trend, 'growing');
 });
